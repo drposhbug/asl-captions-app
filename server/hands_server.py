@@ -184,11 +184,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.server.pipeline is None:
             self.server.last = (frames[-1], [])
             return self.reply(503, {"error": "hand model not installed on the server"})
-        hands, sign = [], None
+        hands, sign, per_frame = [], None, []
         for bgr in frames:
             hands, frame_sign = self.process_frame(bgr, cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes())
+            per_frame.append(frame_sign)
             sign = frame_sign or sign
-        self.reply(200, {"hands": hands, "gloss": sign, "frames": len(frames)})
+        # "glosses" keeps one entry per tracked frame so the glasses can debounce signs as if frames were live.
+        self.reply(200, {"hands": hands, "gloss": sign, "glosses": per_frame, "frames": len(frames)})
 
     def save_clip(self):
         extension = CLIP_TYPES.get((self.headers.get("Content-Type") or "").split(";")[0].strip())
