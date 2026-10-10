@@ -30,7 +30,7 @@ except ImportError as error:
     torch = None
     WILOR_IMPORT_ERROR = error
 
-PORT = 8765
+PORT = int(os.environ.get("HAND_PORT", 8765))  # 8767 when behind forward.py
 MAX_BODY = 15 * 1024 * 1024  # full-size photos from the glasses photo camera fallback
 MAX_CLIP = 300 * 1024 * 1024
 HERE = os.path.dirname(os.path.abspath(__file__))
