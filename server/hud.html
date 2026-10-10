@@ -41,10 +41,10 @@
 <div id="signs"></div>
 <img id="cam" alt="glasses camera with hand skeleton" hidden style="max-width:100%;border:1px solid #1a5a26">
 <script>
-  // Live glasses feed from the hand server (same laptop, port 8765); hidden until a frame arrives.
+  // Live glasses feed, relayed by the hub from the hand server; hidden until a frame arrives.
   (function () {
     var cam = document.getElementById('cam');
-    var src = 'http://' + location.hostname + ':8765/preview.jpg?t=';
+    var src = '/preview.jpg?t=';
     cam.onload = function () { cam.hidden = false; };
     cam.onerror = function () { cam.hidden = true; };
     setInterval(function () { cam.src = src + Date.now(); }, 250);

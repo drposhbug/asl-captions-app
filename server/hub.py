@@ -130,6 +130,13 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/alerts":
             items, nxt = since(alerts, q)
             return self.send(200, {"alerts": items, "next": nxt})
+        if url.path == "/preview.jpg":
+            # Relay the hand server's camera preview so one origin (and the tunnel) serves the whole dashboard.
+            try:
+                with urlopen("http://127.0.0.1:8765/preview.jpg", timeout=2) as r:
+                    return self.send(200, r.read(), "image/jpeg")
+            except Exception:
+                return self.send(404, {"error": "no camera frame yet"})
         if url.path == "/flight":
             try:
                 import flight
