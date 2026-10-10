@@ -37,7 +37,10 @@ class Forward(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except (ConnectionAbortedError, BrokenPipeError):
+            pass  # the dashboard cancels a preview fetch when the next one starts; nothing to do
 
     def do_GET(self):
         self.relay()
