@@ -89,6 +89,30 @@ def clean(text, context=(), location=""):
     return out or text
 
 
+GLOSS_SYSTEM = (
+    "You turn American Sign Language glosses into natural spoken English for a Deaf signer talking to a hearing person. "
+    "ASL grammar differs from English: topic-comment order, no articles, no 'to be', time first, no tense endings. "
+    "Fill in missing words, tense, articles and pronouns. Use the conversation context to pick the right meaning. "
+    "Never add ideas the signer did not sign. Reply with one short first-person sentence and nothing else."
+)
+
+
+def sentence_from_glosses(glosses, context=()):
+    """English sentence for a run of recognised glosses; the raw glosses if Claude declines."""
+    global _client
+    import anthropic
+
+    if _client is None:
+        _client = anthropic.Anthropic(timeout=15.0, max_retries=1)
+    prompt = "\n".join([f"Heard: {c}" for c in list(context)[-3:] if c] + [f"Glosses: {' '.join(glosses)}"])
+    response = _client.messages.create(
+        model=MODEL, max_tokens=1024, system=GLOSS_SYSTEM, output_config={"effort": "low"},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    out = "".join(b.text for b in response.content if b.type == "text").strip()
+    return out or " ".join(glosses)
+
+
 def selftest():
     assert build_prompt("phrase verse", ["Hi there.", "", "How are you?"]) == (
         "Earlier: Hi there.\nEarlier: How are you?\nCaption: phrase verse"

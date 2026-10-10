@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -110,6 +111,79 @@ def detect(pipeline, bgr):
     return hands
 
 
+MODEL_LOCK = threading.Lock()  # the GPU pipeline serves HTTP requests and the webcam thread; one at a time
+
+
+def process_frame(server, bgr, jpeg):
+    """Tracks hands in one clean frame; records training samples, classifies the sign, saves the frame."""
+    with MODEL_LOCK:
+        hands = detect(server.pipeline, bgr)
+    server.last = (bgr, hands)
+    server.last_at = time.time()
+    label, until = server.recording
+    if hands and label and time.time() < until:
+        signs.add_sample(label, hands)
+    # Local landmark model once trained; else Roboflow on the clean frame, only when a hand is in view.
+    if signs.ready():
+        sign = signs.predict(hands)
+    else:
+        sign = gloss.predict(jpeg) if hands else None
+    if hands and server.session_dir:
+        # Save the clean frame, exactly as the camera saw it.
+        name = f"{time.time():.3f}.jpg"
+        with open(os.path.join(server.session_dir, name), "wb") as file:
+            file.write(jpeg)
+    return hands, sign
+
+
+# --camera: a camera on the laptop (webcam facing the signer) replaces the glasses' video stream for
+# hand tracking. No Wi-Fi upload, ~30 fps, ~100 ms latency; the glasses keep captions, display and speech.
+COMMIT_FRAMES = 3        # a gloss must hold this many frames (mirrors pages/index/signing.js)
+SENTENCE_GAP_S = 1.5     # no gloss for this long ends the sentence
+HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
+
+
+def camera_loop(server, index):
+    import urllib.request
+
+    import polish
+
+    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        print(f"camera {index} not found")
+        return
+    print(f"Tracking hands from camera {index}; sentences go to the glasses via {HUB_URL}/say")
+    glosses, candidate, held, last_activity = [], None, 0, 0.0
+    while True:
+        ok, bgr = cap.read()
+        if not ok:
+            time.sleep(0.1)
+            continue
+        jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+        hands, sign = process_frame(server, bgr, jpeg)
+        now = time.time()
+        label = sign["label"] if sign else None
+        if label:
+            last_activity = now
+            held = held + 1 if label == candidate else 1
+            candidate = label
+            if held == COMMIT_FRAMES and (not glosses or glosses[-1] != label):
+                glosses.append(label)
+                print("gloss", label)
+        else:
+            candidate, held = None, 0
+        if glosses and now - last_activity > SENTENCE_GAP_S:
+            text = polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + "."
+            print("sentence", glosses, "->", text)
+            body = json.dumps({"text": text, "glosses": " ".join(glosses)}).encode()
+            try:
+                urllib.request.urlopen(urllib.request.Request(
+                    HUB_URL + "/say", data=body, headers={"Content-Type": "application/json"}), timeout=5)
+            except Exception as error:
+                print("hub unreachable:", error)
+            glosses = []
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         url = urlparse(self.path)
@@ -152,24 +226,7 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(200, {"hands": hands, "gloss": sign})
 
     def process_frame(self, bgr, jpeg):
-        """Tracks hands in one clean frame; records training samples, classifies the sign, saves the frame."""
-        hands = detect(self.server.pipeline, bgr)
-        self.server.last = (bgr, hands)
-        self.server.last_at = time.time()
-        label, until = self.server.recording
-        if hands and label and time.time() < until:
-            signs.add_sample(label, hands)
-        # Local landmark model once trained; else Roboflow on the clean frame, only when a hand is in view.
-        if signs.ready():
-            sign = signs.predict(hands)
-        else:
-            sign = gloss.predict(jpeg) if hands else None
-        if hands and self.server.session_dir:
-            # Save the clean frame, exactly as the glasses camera saw it (after rotating upright).
-            name = f"{time.time():.3f}.jpg"
-            with open(os.path.join(self.server.session_dir, name), "wb") as file:
-                file.write(jpeg)
-        return hands, sign
+        return process_frame(self.server, bgr, jpeg)
 
     def process_segment(self):
         """A 1-3 s video piece from the glasses: far smaller than photos, so captions keep their bandwidth."""
@@ -279,5 +336,8 @@ if __name__ == "__main__":
             server.session_dir = os.path.join(FRAMES_DIR, time.strftime("%Y%m%d-%H%M%S"))
             os.makedirs(server.session_dir)
             print(f"Saving clean frames with hands to {server.session_dir}")
+        if "--camera" in sys.argv:
+            index = int(sys.argv[sys.argv.index("--camera") + 1])
+            threading.Thread(target=camera_loop, args=(server, index), daemon=True).start()
         print(f"Hand server on port {PORT}. Set HAND_SERVER_URL in pages/index/index.ink to http://<this computer's LAN IP>:{PORT}/hands")
         server.serve_forever()

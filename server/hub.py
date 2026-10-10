@@ -238,8 +238,19 @@ YAMNET_KINDS = {
     "Ambulance (siren)": "siren", "Fire engine, fire truck (siren)": "siren",
     "Vehicle horn, car horn, honking": "car_horn", "Car alarm": "car_horn",
     "Knock": "door_knock", "Doorbell": "door_knock", "Ding-dong": "door_knock",
+    # Other sounds a Deaf wearer needs to know about right away.
+    "Shatter": "glass_break", "Glass": "glass_break",
+    "Screaming": "scream", "Shout": "scream", "Yell": "scream", "Children shouting": "scream",
+    "Gunshot, gunfire": "gunshot", "Explosion": "gunshot", "Fireworks": "gunshot",
+    "Baby cry, infant cry": "baby_cry", "Crying, sobbing": "baby_cry",
+    "Dog": "dog", "Bark": "dog",
+    "Alarm": "alarm", "Alarm clock": "alarm", "Buzzer": "alarm", "Emergency vehicle": "siren",
 }
-LABELS = {"fire_alarm": "FIRE ALARM", "siren": "SIREN", "car_horn": "CAR HORN", "door_knock": "DOOR KNOCK"}
+LABELS = {
+    "fire_alarm": "FIRE ALARM", "siren": "SIREN", "car_horn": "CAR HORN", "door_knock": "DOOR KNOCK",
+    "glass_break": "GLASS BREAKING", "scream": "SOMEONE SCREAMING", "gunshot": "LOUD BANG",
+    "baby_cry": "BABY CRYING", "dog": "DOG BARKING", "alarm": "ALARM",
+}
 
 
 def yamnet_classifier():

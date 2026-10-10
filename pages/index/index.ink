@@ -189,6 +189,7 @@ export default {
     sentenceStatus: '',
     sentencePercent: 0,
     banner: '',
+    flash: false,
     quickPhrase: '',
     canvasWidth: 480,
     canvasHeight: 352,
@@ -447,10 +448,17 @@ export default {
       .finally(() => { this.alertPolling = false; });
   },
 
+  // An alarm takes over the whole display and flashes; a Deaf wearer must not be able to miss it.
   showBanner(banner) {
     clearTimeout(this.bannerTimer);
-    this.setData({ banner });
-    this.bannerTimer = setTimeout(() => this.setData({ banner: '' }), BANNER_MS);
+    clearInterval(this.flashTimer);
+    this.setData({ banner, flash: true });
+    this.flashTimer = setInterval(() => this.setData({ flash: !this.data.flash }), 250);
+    this.bannerTimer = setTimeout(() => {
+      clearInterval(this.flashTimer);
+      this.setData({ banner: '', flash: false });
+    }, BANNER_MS);
+    postEvent('status', `alert shown on glasses: ${banner}`);
   },
 
   nextQuickPhrase() {
@@ -765,8 +773,8 @@ export default {
 <page>
   <view class="page">
     <canvas id="hands" class="hands" width="{{canvasWidth}}" height="{{canvasHeight}}"></canvas>
-    <view class="banner" ink:if="{{banner}}">
-      <text class="banner-text">{{banner}}</text>
+    <view class="{{ flash ? 'banner banner-flash' : 'banner' }}" ink:if="{{banner}}">
+      <text class="{{ flash ? 'banner-text banner-text-flash' : 'banner-text' }}">{{banner}}</text>
     </view>
     <view class="status-row">
       <text class="status">{{ (listening ? 'LISTENING' : 'MIC OFF') + (laptopStatus ? ' - ' + laptopStatus : '') }}</text>
@@ -901,17 +909,32 @@ export default {
 
 /* Sound alerts and name mentions must win attention over everything else on screen. */
 .banner {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
-  padding: 8px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
   box-sizing: border-box;
-  border: 2px solid #40ff5e;
-  border-radius: 4px;
+  border: 6px solid #40ff5e;
+  background-color: #000000;
+}
+
+.banner-flash {
+  background-color: #40ff5e;
 }
 
 .banner-text {
-  font-size: 24px;
-  font-weight: 500;
+  font-size: 44px;
+  font-weight: 700;
   color: #40ff5e;
+}
+
+.banner-text-flash {
+  color: #000000;
 }
 
 .captions {
