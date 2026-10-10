@@ -145,7 +145,8 @@ async function pollSpeaker() {
   if ($('voices').hidden) return;
   try {
     const s = await (await fetch('/speaker')).json();
-    $('vnow').textContent = s.at == null ? '' : 'SPEAKING: ' + (s.name ? s.name + ' (' + Math.round(s.confidence * 100) + '%)' : 'unknown');
+    const side = { left: ' <<< LEFT', right: ' RIGHT >>>', center: ' ^ AHEAD' }[s.side] || '';
+    $('vnow').textContent = s.at == null && !s.side ? '' : 'SPEAKING: ' + (s.name ? s.name + ' (' + Math.round(s.confidence * 100) + '%)' : 'unknown') + side;
   } catch (err) { $('vnow').textContent = 'hub unreachable'; }
   setTimeout(pollSpeaker, 1000);
 }

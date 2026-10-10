@@ -64,8 +64,10 @@ def push_alert(kind, label, confidence, direction=None):
 # --- who is talking (speaker.py) -----------------------------------------------
 mic = deque(maxlen=40)  # (end time, ~0.975 s window): recent mic audio shared by speaker id and enrollment
 mic_on = False
-NO_SPEAKER = {"name": None, "confidence": 0.0, "at": None}
+NO_SPEAKER = {"name": None, "confidence": 0.0, "at": None, "side": None}
 speaker = NO_SPEAKER
+# Which side the current voice comes from (stereo mic only): {"side": 'left'|'center'|'right', "at": ms}
+voice_side = {"side": None, "at": 0}
 last_speaker_event = [None, 0.0]  # name, time.time()
 HOLD_S = 4.0
 
@@ -82,7 +84,9 @@ def note_speaker(result):
 
 def current_speaker():
     s = speaker
-    return s if s["at"] and now_ms() - s["at"] <= HOLD_S * 1000 else NO_SPEAKER
+    fresh = s if s["at"] and now_ms() - s["at"] <= HOLD_S * 1000 else NO_SPEAKER
+    side = voice_side["side"] if now_ms() - voice_side["at"] <= HOLD_S * 1000 else None
+    return dict(fresh, side=side) if side else fresh
 
 
 def voice_name(q):
@@ -383,6 +387,9 @@ def listen(use_yamnet):
             mic.append((time.time(), wave))
             hits = classify(wave)
             if getattr(classify, "speech", 0) >= 0.5:
+                if stereo_mode:  # in a group, which side the talker is on matters as much as who it is
+                    import direction
+                    voice_side.update(side=direction.direction(frames, RATE, MIC_SPACING_M)[0], at=now_ms())
                 identify_speaker()
             for kind, label, conf in hits:
                 t = time.time()

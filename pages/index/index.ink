@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b3-speaker-arrows';
+const BUILD = 'b4-voice-direction';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -227,7 +227,8 @@ export default {
         fetch(`${hubUrl()}/speaker`)
           .then((response) => (response.ok ? response.json() : null))
           .then((body) => {
-            if (body && body.name) this.knownSpeaker = { name: body.name === 'YOU' ? 'YOU' : body.name, at: Date.now() };
+            // Name (enrolled voice) and side (stereo mic) are independent; either alone is worth showing.
+            if (body && (body.name || body.side)) this.knownSpeaker = { name: body.name || '', side: body.side || '', at: Date.now() };
           })
           .catch(() => {});
       }, 2000);
@@ -439,7 +440,8 @@ export default {
     }
     // A voice the laptop recognises (enrolled on the dashboard) names the speaker outright.
     if (this.knownSpeaker && Date.now() - this.knownSpeaker.at < 6000) {
-      mark.label = this.knownSpeaker.name;
+      const arrow = { left: '<<< ', right: '>>> ', center: '^ ' }[this.knownSpeaker.side] || '';
+      mark.label = `${arrow}${this.knownSpeaker.name}`.trim();
       this.renderCaptions();
       return postEvent('caption', said, mark.confidence, mark.label);
     }
