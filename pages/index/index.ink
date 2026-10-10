@@ -416,7 +416,9 @@ export default {
       // Full resolution: these frames become training data.
       stream = await openCamera(1280, 720);
       if (!this.visible) throw new Error('Glasses went to sleep');
-      const mimeType = ['video/mp4', 'video/webm;codecs=vp8,opus'].find((type) => MediaRecorder.isTypeSupported(type));
+      // isTypeSupported and Blob are missing on some firmware: guard the check and record one chunk.
+      const canCheck = typeof MediaRecorder.isTypeSupported === 'function';
+      const mimeType = ['video/mp4', 'video/webm;codecs=vp8,opus'].find((type) => !canCheck || MediaRecorder.isTypeSupported(type));
       if (!mimeType) throw new Error('No video recording format is available');
       const recorder = new MediaRecorder(stream, { mimeType });
       const chunks = [];
@@ -427,7 +429,7 @@ export default {
       });
       this.recorder = recorder;
       const started = Date.now();
-      recorder.start(1000);
+      recorder.start();
       limit = setTimeout(() => this.stopRecording(), MAX_CLIP_MS);
       this.setData({ clipStatus: `\u25CF REC \u00B7 TAP TO STOP (MAX ${MAX_CLIP_MS / 1000}s)` });
       await stopped;
@@ -435,11 +437,12 @@ export default {
       stream.getTracks().forEach((track) => track.stop());
       stream = null;
       if (!chunks.length) throw new Error('Recorder produced no data');
-      const clip = new Blob(chunks, { type: mimeType.split(';')[0] });
+      const type = mimeType.split(';')[0];
+      const clip = chunks.length === 1 || typeof Blob !== 'function' ? chunks[0] : new Blob(chunks, { type });
       const seconds = Math.round((Date.now() - started) / 1000);
-      this.setData({ clipStatus: `UPLOADING ${seconds}s CLIP \u00B7 ${Math.round(clip.size / 1024)} KB\u2026` });
+      this.setData({ clipStatus: `UPLOADING ${seconds}s CLIP \u00B7 ${Math.round((clip.size || 0) / 1024)} KB\u2026` });
       const response = await withTimeout(
-        fetch(CLIP_UPLOAD_URL, { method: 'POST', headers: { 'Content-Type': clip.type }, body: clip }),
+        fetch(CLIP_UPLOAD_URL, { method: 'POST', headers: { 'Content-Type': type }, body: clip }),
         60000,
         'Clip upload',
       );
@@ -447,7 +450,9 @@ export default {
       const { saved } = await response.json();
       this.setData({ clipStatus: `\u2713 CLIP SAVED \u00B7 ${saved}` });
     } catch (error) {
-      this.setData({ clipStatus: `\u2715 CLIP FAILED \u00B7 ${(error && error.message) || error}` });
+      const message = (error && error.message) || String(error);
+      this.setData({ clipStatus: `\u2715 CLIP FAILED \u00B7 ${message}` });
+      postEvent('status', `clip failed: ${message}`);
     } finally {
       clearTimeout(limit);
       if (stream) stream.getTracks().forEach((track) => track.stop());
