@@ -54,6 +54,25 @@ export class GlossStream {
   }
 }
 
+// The signer's own phrases: these gloss sets are spoken word for word, skipping the language model.
+// Keyed by sorted glosses, since ASL order varies ("WHERE GATE C4" = "GATE C4 WHERE").
+const PHRASES = [
+  ['WHICH GATE THIS', 'Which gate is this?'],
+  ['ME DEAF', "I'm deaf."],
+  ['THIS GATE C4', 'Is this gate C4?'],
+  ['WHERE GATE C4', 'Where is gate C4?'],
+  ['THIS FLIGHT DELAYED', 'Is this flight delayed?'],
+  ['WHEN FOOD ARRIVE', 'When will the food arrive?'],
+  ['ME LOST', "I'm lost."],
+];
+const phraseKey = (glosses) => glosses.join(' ').toUpperCase().replace(/\bI\b/g, 'ME').replace(/\bC 4\b/g, 'C4')
+  .split(/\s+/).sort().join(' ');
+const PHRASE_BY_KEY = new Map(PHRASES.map(([glosses, sentence]) => [phraseKey([glosses]), sentence]));
+
+export function matchPhrase(glosses) {
+  return PHRASE_BY_KEY.get(phraseKey(glosses)) || null;
+}
+
 export function buildPrompt({ glosses, speech, scene }) {
   const lines = [`Glosses: ${glosses.join(' ')}`];
   if (speech) lines.push(`The hearing person recently said: "${speech}"`);

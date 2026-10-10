@@ -192,6 +192,18 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/speaker/profiles":
             import speaker as voices
             return self.send(200, voices.profiles())
+        if url.path == "/tts":  # ElevenLabs voice for a sentence the glasses speak
+            text = q.get("text", [""])[0].strip()
+            if not 0 < len(text) <= 300:
+                return self.send(400, {"error": "text must be 1..300 chars"})
+            import tts
+            if not tts.available():
+                return self.send(503, {"error": "set ELEVENLABS_API_KEY"})
+            try:
+                return self.send(200, tts.speak(text), "audio/mpeg")
+            except Exception as e:  # any API failure: the glasses fall back to their built-in voice
+                print("tts failed:", e)
+                return self.send(502, {"error": str(e)[:200]})
         if url.path == "/flight":
             try:
                 import flight

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { GlossStream, buildPrompt, parseSentence, COMMIT_FRAMES, SENTENCE_GAP_MS } from './signing.js';
+import { GlossStream, buildPrompt, parseSentence, matchPhrase, COMMIT_FRAMES, SENTENCE_GAP_MS } from './signing.js';
 
 const stream = new GlossStream();
 const hello = { label: 'HELLO', confidence: 0.95 };
@@ -22,3 +22,8 @@ assert.equal(parseSentence(''), null);
 assert.equal(parseSentence('{"sentence": "x", "confidence": 7}').confidence, 1, 'confidence is clamped');
 
 console.log('signing.test ok');
+
+assert.equal(matchPhrase(['WHERE', 'GATE', 'C4']), 'Where is gate C4?');
+assert.equal(matchPhrase(['GATE', 'C', '4', 'WHERE']), 'Where is gate C4?', 'any order, fingerspelled C 4');
+assert.equal(matchPhrase(['I', 'DEAF']), "I'm deaf.", 'I counts as ME');
+assert.equal(matchPhrase(['ME', 'WANT', 'COFFEE']), null, 'other signing goes to the language model');

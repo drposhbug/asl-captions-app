@@ -7,7 +7,7 @@
 <script setup>
 import wx from 'wx';
 import { LanguageModel } from 'language-model';
-import { GlossStream, buildPrompt, parseSentence, SYSTEM_PROMPT, AUTO_SPEAK_CONFIDENCE } from './signing.js';
+import { GlossStream, buildPrompt, parseSentence, matchPhrase, SYSTEM_PROMPT, AUTO_SPEAK_CONFIDENCE } from './signing.js';
 import { fallbackSentence } from './dictionary.js';
 
 // A fresh look at the scene costs an image prompt, so take one at most this often.
@@ -57,13 +57,11 @@ const QUICK_PHRASE_MS = 8000;
 const QUESTION_WINDOW_MS = 10000;
 const QUESTION_RE = /\?\s*$|^(do|does|did|are|is|can|could|would|will|should|have|has|was|were|what|where|when|who|why|how|any|anything)\b/i;
 const QUICK_PHRASES = [
-  'Which gate is this?',
-  "I'm deaf.",
-  'Is this gate C4?',
-  'Where is gate C4?',
-  'Is this flight delayed?',
-  'When will the food arrive?',
-  "I'm lost.",
+  "I'm deaf, please face me so I can read you.",
+  'Please write it down or type it on your phone.',
+  'I use sign language. Please speak slowly and clearly.',
+  'Can you point me to the gate?',
+  'I need help, please call someone who can sign.',
 ];
 const ALERT_TEXT = {
   fire_alarm: '! FIRE ALARM',
@@ -776,6 +774,8 @@ export default {
 
   async fillSentence(glosses) {
     this.pendingSentence = null;
+    const phrase = matchPhrase(glosses);
+    if (phrase) return this.speakSentence(phrase, 100);
     this.setData({ sentence: '', sentencePercent: 0, sentenceStatus: 'FILLING...' });
     const speech = Array.from(this.segments.values()).slice(-3).join(' ').slice(-300);
     let result = null;
@@ -800,9 +800,26 @@ export default {
 
   speakSentence(sentence, percent) {
     this.pendingSentence = null;
-    speechSynthesis.speak(new SpeechSynthesisUtterance(sentence), 'immediate');
+    this.speakAloud(sentence);
     this.setData({ glossText: '', sentence, sentencePercent: percent || 0, sentenceStatus: percent ? `SPOKEN - ${percent}% SURE` : 'SPOKEN' });
     postEvent('sentence', sentence, percent ? percent / 100 : null);
+  },
+
+  // ElevenLabs voice via the hub; any failure (hub down, no key, undecodable audio) uses the built-in voice.
+  async speakAloud(sentence) {
+    try {
+      const response = await fetch(`${hubUrl()}/tts?text=${encodeURIComponent(sentence)}`);
+      if (!response.ok) throw new Error(`tts replied ${response.status}`);
+      this.audioContext = this.audioContext || new AudioContext();
+      await this.audioContext.resume();
+      const source = this.audioContext.createBufferSource();
+      source.buffer = await this.audioContext.decodeAudioData(await response.arrayBuffer());
+      source.connect(this.audioContext.destination);
+      source.start();
+    } catch (error) {
+      postEvent('status', `elevenlabs: ${(error && error.message) || error}`);
+      speechSynthesis.speak(new SpeechSynthesisUtterance(sentence), 'immediate');
+    }
   },
 
   drawHands(ctx, hands) {

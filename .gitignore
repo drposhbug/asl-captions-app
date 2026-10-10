@@ -13,3 +13,4 @@ server/signs/*
 !server/signs/.gitkeep
 server/speakers/*
 !server/speakers/.gitkeep
+server/tts/
