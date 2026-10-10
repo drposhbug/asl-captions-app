@@ -24,7 +24,7 @@ const hubUrl = () => `http://${laptop}:8766`;
 const clipUrl = () => `http://${laptop}:8765/clips`;
 const segmentUrl = () => `http://${laptop}:8765/segment`;
 // Hand tracking streams short low-bitrate video pieces: ~50x smaller than photos, so captions keep running.
-const SEGMENT_MS = 2000;
+const SEGMENT_MS = 1500;
 const SEGMENT_BITRATE = 500000;
 
 // Probes every candidate hub in parallel; resolves true when one answers so the page can start posting.
@@ -256,8 +256,9 @@ export default {
   onHostFocus() {
     this.hostFocused = true;
     if (this.visible && !this.data.listening) this.startCaptions();
-    // The camera refuses to open while the view is not interactive; resume hand tracking once it is.
-    if (this.visible && this.handsWanted && !this.handRun) this.startHands();
+    // Hand tracking starts by itself once the view is interactive (the camera refuses to open before that);
+    // swipe down turns it off, and off it stays until the next swipe.
+    if (this.visible && !this.handRun && !this.recording && !this.handsOff) this.startHands();
   },
 
   onHostBlur() {
@@ -600,9 +601,13 @@ export default {
     if (this.recording) return; // the camera is busy with a clip
     if (this.handRun || this.handsWanted) {
       this.handsWanted = false;
+      this.handsOff = true;
       this.stopHands();
-      this.setData({ handStatus: '' });
-    } else this.startHands();
+      this.setData({ handStatus: 'HANDS OFF - SWIPE DOWN TO START' });
+    } else {
+      this.handsOff = false;
+      this.startHands();
+    }
   },
 
   // Streams camera frames to the WiLoR hand server and draws the returned hand skeletons.
@@ -618,7 +623,7 @@ export default {
     try {
       if (!ctx) throw new Error('Hand overlay canvas is missing');
       // The same recorder that makes clips (proven on these glasses), at low resolution and bitrate.
-      run.stream = await openCamera(640, 480);
+      run.stream = await openCamera(480, 360);
       if (!active()) return;
       const canCheck = typeof MediaRecorder.isTypeSupported === 'function';
       const mimeType = ['video/mp4', 'video/webm;codecs=vp8,opus'].find((type) => !canCheck || MediaRecorder.isTypeSupported(type));
