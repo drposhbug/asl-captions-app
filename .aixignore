@@ -7,3 +7,6 @@ skills-lock.json
 .aixignore
 .playwright-mcp
 store-media
+server
+pages/index/signing.test.mjs
+pages/index/dictionary.test.mjs

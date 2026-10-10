@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASL HUD</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: #000; color: #40ff5e; font-family: sans-serif; }
+  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.7; margin: 20px 0 6px; }
+  #sentence { font-size: clamp(1.6rem, 6vw, 3rem); font-weight: bold; min-height: 1.2em; }
+  .bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .track { flex: 1; height: 10px; border: 1px solid #40ff5e; }
+  .fill { height: 100%; background: #40ff5e; width: 0; }
+  #signs { font-size: 1.4rem; letter-spacing: 0.05em; min-height: 1.2em; }
+  #captions div { font-size: 1.2rem; margin: 4px 0; }
+  .who { opacity: 0.7; }
+  #banner { position: fixed; inset: 0 0 auto 0; padding: 24px 16px; font-size: 2rem; font-weight: bold; text-align: center;
+            animation: flash 0.5s steps(1) infinite; z-index: 1; }
+  @keyframes flash { 0% { background: #f00; color: #fff; } 50% { background: #40ff5e; color: #000; } }
+  #log { height: 30vh; overflow-y: auto; border-top: 1px solid #40ff5e; font-family: monospace; font-size: 0.85rem; }
+  #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<div id="banner" role="alert" hidden></div>
+<h2>Sentence</h2>
+<div id="sentence" aria-live="polite"></div>
+<div class="bar"><div class="track"><div class="fill" id="conf"></div></div><span id="pct"></span></div>
+<h2>Signs</h2>
+<div id="signs"></div>
+<h2>Captions</h2>
+<div id="captions" aria-live="polite"></div>
+<h2>Log</h2>
+<div id="log"></div>
+<script>
+let evNext = 0, alNext = 0, signs = [], captions = [], bannerTimer;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function onEvent(e) {
+  if (e.type === 'sentence') {
+    $('sentence').textContent = e.text;
+    const pct = e.confidence == null ? '' : Math.round(e.confidence * 100) + '%';
+    $('conf').style.width = pct || '0';
+    $('pct').textContent = pct;
+    signs = [];
+  } else if (e.type === 'sign') {
+    signs = signs.concat(e.text).slice(-12);
+  } else if (e.type === 'caption') {
+    captions = captions.concat(e).slice(-4);
+  }
+  const line = document.createElement('div');
+  line.textContent = new Date(e.at || Date.now()).toLocaleTimeString() + '  ' + e.type + '  ' + e.text;
+  $('log').append(line);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+
+function render() {
+  $('signs').textContent = signs.join(' ');
+  $('captions').innerHTML = captions.map(c =>
+    '<div>' + (c.label ? '<span class="who">' + esc(c.label) + ': </span>' : '') + esc(c.text) +
+    (c.confidence != null && c.confidence < 0.6 ? ' ?' : '') + '</div>').join('');
+}
+
+function onAlert(a) {
+  $('banner').textContent = '⚠ ' + a.label;
+  $('banner').hidden = false;
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => { $('banner').hidden = true; }, 5000);
+  if (navigator.vibrate) navigator.vibrate([300, 100, 300]);
+}
+
+async function poll() {
+  try {
+    const ev = await (await fetch('/events?since=' + evNext)).json();
+    ev.events.forEach(onEvent);
+    evNext = ev.next;
+    render();
+    const al = await (await fetch('/alerts?since=' + alNext)).json();
+    // first poll only catches up; don't replay old alerts
+    if (alNext) al.alerts.forEach(onAlert);
+    alNext = al.next || -1;
+  } catch (err) { console.warn('poll failed', err); }
+  setTimeout(poll, 1000);
+}
+poll();
+</script>
+</body>
+</html>

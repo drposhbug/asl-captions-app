@@ -4,3 +4,7 @@ node_modules/
 .claude/
 .playwright-mcp/
 .aix/
+server/frames/
+server/clips/
+__pycache__/
+server/events.log
