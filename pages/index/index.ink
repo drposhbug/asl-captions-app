@@ -237,7 +237,7 @@ export default {
         if (isNotInteractive(event)) return this.setData({ listening: false });
         const message = (event && (event.message || event.error)) || 'Speech error';
         // "Cloud ASR can't accept audio" is a transient hiccup (mic busy or a dropped upload): let onend retry.
-        if (/accept audio|audio-capture|network|no-speech/i.test(message)) {
+        if (/accept audio|queue|full|audio-capture|network|no-speech/i.test(message)) {
           postEvent('status', `speech: ${message}`);
           return this.setData({ listening: false });
         }
@@ -249,7 +249,11 @@ export default {
         if (this.lastKey) this.finalizeSegment(this.lastKey);
         this.lastKey = null;
         this.setData({ listening: false });
-        if (this.visible && !this.data.error) this.startCaptions();
+        // A short pause before restarting lets the cloud ASR drain its audio queue instead of overflowing it.
+        clearTimeout(this.captionRestart);
+        this.captionRestart = setTimeout(() => {
+          if (this.visible && !this.data.error && !this.data.listening && !this.uploading) this.startCaptions();
+        }, 1500);
       };
       this.recognition = recognition;
     }
@@ -464,6 +468,9 @@ export default {
       const clip = chunks.length === 1 || typeof Blob !== 'function' ? chunks[0] : new Blob(chunks, { type });
       const seconds = Math.round((Date.now() - started) / 1000);
       this.setData({ clipStatus: `UPLOADING ${seconds}s CLIP - ${Math.round((clip.size || 0) / 1024)} KB...` });
+      // The upload saturates the Wi-Fi; keep the mic's audio stream off it until the clip is through.
+      this.uploading = true;
+      this.stopCaptions();
       const { saved } = await postBinary(CLIP_UPLOAD_URL, clip, type, 120000);
       this.setData({ clipStatus: `OK - CLIP SAVED - ${saved}` });
     } catch (error) {
@@ -477,6 +484,10 @@ export default {
       if (stream) stream.getTracks().forEach((track) => track.stop());
       this.recorder = null;
       this.recording = false;
+      if (this.uploading) {
+        this.uploading = false;
+        if (this.visible) this.startCaptions();
+      }
     }
   },
 
@@ -542,6 +553,9 @@ export default {
         this.drawHands(ctx, hands);
         this.onGlossFrame(gloss, jpeg);
         frames += 1;
+        if (frames === 1) postEvent('status', `hands: first frame sent via ${useStream ? 'video grab' : 'photo camera'}`);
+        // Photos are full-size; one a second keeps the Wi-Fi free for the captions' audio stream.
+        if (!useStream) await new Promise((resolve) => setTimeout(resolve, 1000));
         const fps = (frames * 1000) / (Date.now() - started);
         const seen = gloss ? `${gloss.label} ${Math.round(gloss.confidence * 100)}%` : `${hands.length} SEEN`;
         this.setData({ handStatus: `HANDS - ${seen} - ${fps.toFixed(1)} FPS` });
