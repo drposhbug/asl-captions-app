@@ -53,12 +53,13 @@ def add_event(ev):
     return ev
 
 
-def push_alert(kind, label, confidence, direction=None):
+def push_alert(kind, label, confidence, direction=None, angle=None):
     # alert and its mirror event share one id so the HUD can de-duplicate them
     with lock:
         ev = add_event({"type": "alert", "text": label, "confidence": round(confidence, 3), "label": kind, "at": now_ms()})
         alerts.append({"id": ev["id"], "kind": kind, "label": label, "confidence": ev["confidence"], "at": ev["at"],
-                       "direction": direction})  # 'left' | 'center' | 'right' | None (mono mic)
+                       "direction": direction,  # 'left' | 'center' | 'right' | None (mono mic)
+                       "angle": angle})  # degrees, -90 (left) .. 0 (ahead) .. 90 (right); None (mono mic)
 
 
 # --- who is talking (speaker.py) -----------------------------------------------
@@ -66,8 +67,8 @@ mic = deque(maxlen=40)  # (end time, ~0.975 s window): recent mic audio shared b
 mic_on = False
 NO_SPEAKER = {"name": None, "confidence": 0.0, "at": None, "side": None}
 speaker = NO_SPEAKER
-# Which side the current voice comes from (stereo mic only): {"side": 'left'|'center'|'right', "at": ms}
-voice_side = {"side": None, "at": 0}
+# Which side the current voice comes from (stereo mic only): {"side": 'left'|'center'|'right', "angle": deg, "at": ms}
+voice_side = {"side": None, "angle": None, "at": 0}
 last_speaker_event = [None, 0.0]  # name, time.time()
 HOLD_S = 4.0
 
@@ -86,7 +87,7 @@ def current_speaker():
     s = speaker
     fresh = s if s["at"] and now_ms() - s["at"] <= HOLD_S * 1000 else NO_SPEAKER
     side = voice_side["side"] if now_ms() - voice_side["at"] <= HOLD_S * 1000 else None
-    return dict(fresh, side=side) if side else fresh
+    return dict(fresh, side=side, angle=voice_side["angle"]) if side else fresh
 
 
 def voice_name(q):
@@ -251,7 +252,13 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path in ("/record", "/train"):
             return self.relay("POST")
         if urlparse(self.path).path == "/test-alert":
-            push_alert("fire_alarm", "FIRE ALARM (TEST)", 1.0)
+            # ?angle=-45 tries the direction arrow without a stereo mic (-90 left .. 90 right)
+            try:
+                angle = max(-90.0, min(90.0, float(parse_qs(urlparse(self.path).query)["angle"][0])))
+            except (KeyError, ValueError):
+                angle = None
+            side = None if angle is None else "center" if abs(angle) <= 20 else "right" if angle > 0 else "left"
+            push_alert("fire_alarm", "FIRE ALARM (TEST)", 1.0, side, angle)
             return self.send(200, {"ok": True})
         if urlparse(self.path).path == "/alerts":
             length = int(self.headers.get("Content-Length") or 0)
@@ -259,8 +266,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not 0 < length <= MAX_BODY:
                     raise ValueError("body must be 1..%d bytes" % MAX_BODY)
                 a = json.loads(self.rfile.read(length))
-                push_alert(str(a["kind"])[:40], str(a["label"])[:80], float(a["confidence"]))
-            except (ValueError, KeyError, TypeError) as e:
+                angle = a.get("angle")
+                angle = None if angle is None else max(-90.0, min(90.0, float(angle)))
+                side = a.get("direction") if a.get("direction") in ("left", "center", "right") else None
+                push_alert(str(a["kind"])[:40], str(a["label"])[:80], float(a["confidence"]), side, angle)
+            except (ValueError, KeyError, TypeError, AttributeError) as e:
                 return self.send(400, {"error": "alert needs kind, label, confidence: %s" % e})
             return self.send(200, {"ok": True})
         if urlparse(self.path).path == "/say":  # demo fallback: glasses speak `text` (kind "say" alert)
@@ -404,21 +414,22 @@ def listen(use_yamnet):
             if getattr(classify, "speech", 0) >= 0.5:
                 if stereo_mode:  # in a group, which side the talker is on matters as much as who it is
                     import direction
-                    voice_side.update(side=direction.direction(frames, RATE, MIC_SPACING_M)[0], at=now_ms())
+                    side, angle = direction.direction(frames, RATE, MIC_SPACING_M)
+                    voice_side.update(side=side, angle=angle, at=now_ms())
                 identify_speaker()
             for kind, label, conf in hits:
                 t = time.time()
                 if t - last.get(kind, 0) >= DEBOUNCE_S:
                     last[kind] = t
-                    side = None
+                    side = angle = None
                     if stereo_mode:
                         import direction
-                        side = direction.direction(frames, RATE, MIC_SPACING_M)[0]
-                    push_alert(kind, label, conf, side)
+                        side, angle = direction.direction(frames, RATE, MIC_SPACING_M)
+                    push_alert(kind, label, conf, side, angle)
                     print("ALERT", kind, round(conf, 2))
                     if FORWARD_URL:
                         try:
-                            body = json.dumps({"kind": kind, "label": label, "confidence": conf}).encode()
+                            body = json.dumps({"kind": kind, "label": label, "confidence": conf, "direction": side, "angle": angle}).encode()
                             urlopen(Request(FORWARD_URL + "/alerts", data=body, headers={"Content-Type": "application/json"}), timeout=5)
                         except Exception as e:  # the local HUD already has the alert; never stop listening
                             print("forward failed:", e)

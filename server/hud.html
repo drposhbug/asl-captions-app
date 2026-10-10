@@ -145,7 +145,7 @@ async function pollSpeaker() {
   if ($('voices').hidden) return;
   try {
     const s = await (await fetch('/speaker')).json();
-    const side = { left: ' <<< LEFT', right: ' RIGHT >>>', center: ' ^ AHEAD' }[s.side] || '';
+    const side = ({ left: ' <<< LEFT', right: ' RIGHT >>>', center: ' ^ AHEAD' }[s.side] || '') + (s.side && typeof s.angle === 'number' ? ' ' + Math.round(Math.abs(s.angle)) + '°' : '');
     $('vnow').textContent = s.at == null && !s.side ? '' : 'SPEAKING: ' + (s.name ? s.name + ' (' + Math.round(s.confidence * 100) + '%)' : 'unknown') + side;
   } catch (err) { $('vnow').textContent = 'hub unreachable'; }
   setTimeout(pollSpeaker, 1000);
@@ -254,7 +254,8 @@ async function poll() {
     render();
     const al = await (await fetch('/alerts?since=' + alNext)).json();
     // A stereo mic adds which side the sound came from.
-    const withSide = a => (a.direction === 'left' ? '<<< ' : a.direction === 'center' ? '^ ' : '') + a.label + (a.direction === 'right' ? ' >>>' : '');
+    const deg = n => typeof n === 'number' ? ' ' + Math.round(Math.abs(n)) + '°' : '';
+    const withSide = a => (a.direction === 'left' ? '<<< ' : a.direction === 'center' ? '^ ' : '') + a.label + (a.direction === 'right' ? ' >>>' : '') + deg(a.angle);
     al.alerts.filter(a => a.kind !== 'say').forEach(a => onAlert(a.id, withSide(a)));
     alNext = al.next;
     primed = true;

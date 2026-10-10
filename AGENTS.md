@@ -14,6 +14,7 @@ An accessibility agent for Deaf and hard-of-hearing users on Rokid Glasses.
 - Shows a confidence bar under each filled sentence.
 - Logs captions, signs, sentences and alerts to the laptop hub (`server/hub.py`, port 8766); failures never block the glasses.
 - Polls the hub for sound alerts (fire alarm, siren, car horn, door knock) and shows a 6 s banner; also bannered when someone says the wearer's name.
+- With a stereo mic (`hub.py --stereo`, `server/direction.py`) the banner shows an arrow rotated to the exact angle (-90 left .. 90 right) and "45° LEFT"; two mics cannot tell front from behind. `POST /test-alert?angle=-45` tries it.
 - Labels who is speaking (e.g. "TSA AGENT:") from the camera scene and what was said, with a separate language-model session.
 - Marks captions with "?" when speech recognition reports low confidence (e.g. muffled PA announcements).
 - Falls back to a dictionary sentence (`pages/index/dictionary.js`) when the language model is offline; the signer taps to speak it.

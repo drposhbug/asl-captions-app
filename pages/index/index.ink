@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b6-jarvis';
+const BUILD = 'b7-arrow';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -193,6 +193,9 @@ export default {
     sentenceStatus: '',
     sentencePercent: 0,
     banner: '',
+    // Degrees the alert's sound came from (-90 left .. 0 ahead .. 90 right), or null: rotates the banner arrow.
+    bannerAngle: null,
+    bannerWhere: '',
     flash: false,
     quickPhrase: '',
     canvasWidth: 480,
@@ -503,9 +506,12 @@ export default {
         if (primed && latest && latest.kind === 'say') this.speakSentence(latest.label, 100);
         else if (primed && latest) {
           const text = ALERT_TEXT[latest.kind] || `! ${String(latest.kind).toUpperCase()}`;
-          // A stereo mic on the laptop (or a chest camera) can say which side a sound came from.
-          const arrow = { left: '<<< ', right: '', center: '^ ' }[latest.direction];
-          this.showBanner(latest.direction === 'right' ? `${text} >>>` : `${arrow || ''}${text}`);
+          // A stereo mic on the laptop (or a chest camera) gives the exact angle; older hubs only the side.
+          if (typeof latest.angle === 'number') this.showBanner(text, latest.angle);
+          else {
+            const arrow = { left: '<<< ', right: '', center: '^ ' }[latest.direction];
+            this.showBanner(latest.direction === 'right' ? `${text} >>>` : `${arrow || ''}${text}`);
+          }
         }
       })
       .catch((error) => {
@@ -519,16 +525,18 @@ export default {
   },
 
   // An alarm takes over the whole display and flashes; a Deaf wearer must not be able to miss it.
-  showBanner(banner) {
+  showBanner(banner, angle = null) {
     clearTimeout(this.bannerTimer);
     clearInterval(this.flashTimer);
-    this.setData({ banner, flash: true });
+    const degrees = angle === null ? 0 : Math.round(Math.abs(angle));
+    const bannerWhere = angle === null ? '' : degrees <= 10 ? 'AHEAD' : `${degrees}° ${angle < 0 ? 'LEFT' : 'RIGHT'}`;
+    this.setData({ banner, bannerAngle: angle === null ? null : Math.round(angle), bannerWhere, flash: true });
     this.flashTimer = setInterval(() => this.setData({ flash: !this.data.flash }), 250);
     this.bannerTimer = setTimeout(() => {
       clearInterval(this.flashTimer);
-      this.setData({ banner: '', flash: false });
+      this.setData({ banner: '', bannerAngle: null, bannerWhere: '', flash: false });
     }, BANNER_MS);
-    postEvent('status', `alert shown on glasses: ${banner}`);
+    postEvent('status', `alert shown on glasses: ${banner}${bannerWhere ? ` ${bannerWhere}` : ''}`);
   },
 
   nextQuickPhrase() {
@@ -876,7 +884,13 @@ export default {
   <view class="page">
     <canvas id="hands" class="hands" width="{{canvasWidth}}" height="{{canvasHeight}}"></canvas>
     <view class="{{ flash ? 'banner banner-flash' : 'banner' }}" ink:if="{{banner}}">
+      <view class="arrow" ink:if="{{bannerWhere}}" style="transform: rotate({{bannerAngle}}deg)">
+        <view class="{{ flash ? 'arrow-head arrow-head-left arrow-flash' : 'arrow-head arrow-head-left' }}"></view>
+        <view class="{{ flash ? 'arrow-head arrow-head-right arrow-flash' : 'arrow-head arrow-head-right' }}"></view>
+        <view class="{{ flash ? 'arrow-shaft arrow-flash' : 'arrow-shaft' }}"></view>
+      </view>
       <text class="{{ flash ? 'banner-text banner-text-flash' : 'banner-text' }}">{{banner}}</text>
+      <text class="{{ flash ? 'banner-text banner-text-flash' : 'banner-text' }}" ink:if="{{bannerWhere}}">{{bannerWhere}}</text>
     </view>
     <view class="status-row">
       <text class="status">{{ (listening ? 'LISTENING' : 'MIC OFF') + (laptopStatus ? ' - ' + laptopStatus : '') }}</text>
@@ -1017,11 +1031,53 @@ export default {
   width: 100%;
   height: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 16px;
   box-sizing: border-box;
   border: 6px solid #40ff5e;
+  background-color: #000000;
+}
+
+/* An arrow pointing where the sound is: 0deg is straight ahead (up), rotated by the mic's angle. */
+.arrow {
+  position: relative;
+  width: 80px;
+  height: 110px;
+  margin-bottom: 12px;
+}
+
+.arrow-shaft {
+  position: absolute;
+  left: 32px;
+  top: 14px;
+  width: 16px;
+  height: 96px;
+  background-color: #40ff5e;
+}
+
+.arrow-head {
+  position: absolute;
+  top: 14px;
+  width: 16px;
+  height: 56px;
+  background-color: #40ff5e;
+}
+
+.arrow-head-left {
+  left: 32px;
+  transform: rotate(40deg);
+  transform-origin: 50% 0;
+}
+
+.arrow-head-right {
+  left: 32px;
+  transform: rotate(-40deg);
+  transform-origin: 50% 0;
+}
+
+.arrow-flash {
   background-color: #000000;
 }
 
