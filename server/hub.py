@@ -191,6 +191,26 @@ class Handler(BaseHTTPRequestHandler):
             push_alert("say", text, 1.0)
             add_event({"type": "sign", "text": glosses, "confidence": 1.0, "label": None, "at": now_ms()})  # after, so the HUD keeps it
             return self.send(200, {"ok": True})
+        if urlparse(self.path).path == "/polish":  # Claude cleans one finished caption utterance
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                if not 0 < length <= MAX_BODY:
+                    raise ValueError("body must be 1..%d bytes" % MAX_BODY)
+                a = json.loads(self.rfile.read(length))
+                text = str(a["text"])[:500]
+                context = [str(c)[:300] for c in a.get("context", [])][-3:]
+            except (ValueError, KeyError, TypeError, AttributeError) as e:
+                return self.send(400, {"error": "polish needs text: %s" % e})
+            import polish
+            if not polish.available():
+                return self.send(503, {"error": "set ANTHROPIC_API_KEY and pip install anthropic"})
+            try:
+                cleaned = polish.clean(text, context)
+            except Exception as e:  # any API failure: the glasses keep the raw caption
+                print("polish failed:", e)
+                return self.send(502, {"error": str(e)[:200]})
+            add_event({"type": "caption", "text": cleaned, "confidence": None, "label": "CLEANED", "at": now_ms()})
+            return self.send(200, {"text": cleaned})
         if urlparse(self.path).path != "/events":
             return self.send(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length") or 0)

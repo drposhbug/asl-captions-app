@@ -3,3 +3,4 @@
 git+https://github.com/warmshao/WiLoR-mini
 opencv-python
 scikit-learn
+anthropic

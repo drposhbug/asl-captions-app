@@ -197,6 +197,8 @@ export default {
   onLoad() {
     this.recognition = null;
     this.segments = new Map();
+    this.utterance = []; // segment keys of the utterance being heard, cleaned together when it ends
+    this.polished = []; // cleaned lines, sent back as context for the next cleanup
     // Per caption segment: recognition confidence and speaker label.
     this.marks = new Map();
     this.lastKey = null;
@@ -294,6 +296,7 @@ export default {
         // The session's last segment gets no successor index, so it is final here.
         if (this.lastKey) this.finalizeSegment(this.lastKey);
         this.lastKey = null;
+        this.polishUtterance();
         this.setData({ listening: false });
         // A short pause before restarting lets the cloud ASR drain its audio queue instead of overflowing it.
         clearTimeout(this.captionRestart);
@@ -341,7 +344,32 @@ export default {
     // No isFinal in this runtime: a segment is final once the next index (or session) starts.
     if (this.lastKey && this.lastKey !== key) this.finalizeSegment(this.lastKey);
     this.lastKey = key;
+    if (!this.utterance.includes(key)) this.utterance.push(key);
     this.renderCaptions();
+  },
+
+  // The host ends a recognition session after each utterance: clean the whole utterance in one Claude call
+  // (fixes misheard words and the duplicate guesses split across pieces), then show the cleaned line.
+  polishUtterance() {
+    const keys = this.utterance.filter((k) => this.segments.has(k));
+    this.utterance = [];
+    const text = keys.map((k) => this.segments.get(k)).join(' ').trim();
+    if (!text) return;
+    const context = this.polished.slice(-3);
+    fetch(`${hubUrl()}/polish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, context }),
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body) => {
+        if (!body || !body.text || !keys.every((k) => this.segments.has(k))) return;
+        this.segments.set(keys[0], body.text);
+        keys.slice(1).forEach((k) => this.segments.delete(k));
+        this.polished.push(body.text);
+        this.renderCaptions();
+      })
+      .catch(() => {});
   },
 
   renderCaptions() {
