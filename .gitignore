@@ -8,3 +8,4 @@ server/frames/
 server/clips/
 __pycache__/
 server/events.log
+dist/
