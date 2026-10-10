@@ -246,6 +246,8 @@ export default {
   },
 
   startCaptions() {
+    // Captions and the camera take turns: full-size camera photos starve the cloud ASR audio upload.
+    if (this.handRun) return this.setData({ listening: false });
     if (typeof SpeechRecognition === 'undefined') {
       this.setData({ error: 'Speech recognition is unavailable' });
       return;
@@ -542,7 +544,8 @@ export default {
     const run = (this.handRun = {});
     this.handsWanted = false;
     const active = () => this.handRun === run;
-    this.setData({ handStatus: 'HANDS - STARTING CAMERA...' });
+    this.stopCaptions();
+    this.setData({ handStatus: 'HANDS - STARTING CAMERA... (CAPTIONS PAUSED)' });
     const ctx = wx.createCanvasContext('hands');
     try {
       if (!ctx) throw new Error('Hand overlay canvas is missing');
@@ -587,9 +590,10 @@ export default {
         this.drawHands(ctx, hands);
         this.onGlossFrame(gloss, jpeg);
         frames += 1;
-        if (frames === 1) postEvent('status', `hands: first frame sent via ${useStream ? 'video grab' : 'photo camera'}`);
-        // Photos are full-size; one a second keeps the Wi-Fi free for the captions' audio stream.
-        if (!useStream) await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (frames === 1) {
+          const kb = Math.round((jpeg.byteLength || jpeg.size || 0) / 1024);
+          postEvent('status', `hands: first frame sent via ${useStream ? 'video grab' : 'photo camera'}, ${kb} KB in ${Date.now() - started} ms`);
+        }
         const fps = (frames * 1000) / (Date.now() - started);
         const seen = gloss ? `${gloss.label} ${Math.round(gloss.confidence * 100)}%` : `${hands.length} SEEN`;
         this.setData({ handStatus: `HANDS - ${seen} - ${fps.toFixed(1)} FPS` });
@@ -608,6 +612,7 @@ export default {
       releaseCamera(run);
       if (active()) this.handRun = null;
       if (ctx && !this.handRun) this.drawHands(ctx, []);
+      if (!this.handRun && this.visible) this.startCaptions();
     }
   },
 
@@ -616,6 +621,7 @@ export default {
     releaseCamera(this.handRun);
     this.handRun = null;
     this.setData({ handStatus: '' });
+    if (this.visible) this.startCaptions();
   },
 
   // Each tracked frame: debounce the gloss, and once the signer pauses, turn the glosses into English.
