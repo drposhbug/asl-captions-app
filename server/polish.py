@@ -6,9 +6,10 @@ Self-check (no API call): python polish.py --selftest
 import os
 import sys
 
-MODEL = os.environ.get("CAPTION_MODEL", "claude-opus-5-5")
+# Sonnet 5.5: fastest and as accurate as Opus on caption cleanup; Haiku leaked its reasoning into the caption.
+MODEL = os.environ.get("CAPTION_MODEL", "claude-sonnet-5-5")
 # Server-side refusal fallback only exists for these models; Haiku has none.
-FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1"}
+FALLBACK_MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1"}
 
 SYSTEM = (
     "You clean up live speech-recognition captions shown to a Deaf reader on AR glasses. "
