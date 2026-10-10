@@ -255,7 +255,7 @@ export default {
     const result = event && event.results && event.results[event.resultIndex];
     const transcript = result && result[0] && result[0].transcript;
     // The host sometimes ignores lang='en-US' and answers in Chinese; drop those results.
-    if (!transcript || /[㐀-鿿]/.test(transcript)) return;
+    if (!transcript || /[\u3400-\u9FFF]/.test(transcript)) return;
     // Interim and final results for the same index replace each other.
     const key = `${event.sessionId}:${event.resultIndex}`;
     this.segments.set(key, transcript.trim());
