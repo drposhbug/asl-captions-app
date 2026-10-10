@@ -12,6 +12,8 @@ import { fallbackSentence } from './dictionary.js';
 
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
+// Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
+const BUILD = 'b1-autostart';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -219,7 +221,10 @@ export default {
     if (!this.alertTimer) this.alertTimer = setInterval(() => this.pollAlerts(), 1000);
     // Re-probe until the laptop answers, and again every 30 s in case the Wi-Fi changed.
     if (!this.laptopTimer) this.laptopTimer = setInterval(() => findLaptop(), 30000);
-    findLaptop().then((found) => this.setData({ laptopStatus: found ? `LAPTOP ${laptop}` : 'LAPTOP NOT FOUND' }));
+    findLaptop().then((found) => {
+      this.setData({ laptopStatus: found ? `LAPTOP ${laptop}` : 'LAPTOP NOT FOUND' });
+      if (found) postEvent('status', `glasses build ${BUILD}`);
+    });
     // Rough location as caption-cleanup context (an airport, a cafe); denial just means no location.
     if (this.locationWatch == null && typeof navigator !== 'undefined' && navigator.geolocation) {
       this.locationWatch = navigator.geolocation.watchPosition(
