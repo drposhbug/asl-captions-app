@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b2-diagnostics';
+const BUILD = 'b3-speaker-arrows';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -219,6 +219,17 @@ export default {
     this.visible = true;
     this.startCaptions();
     if (!this.alertTimer) this.alertTimer = setInterval(() => this.pollAlerts(), 1000);
+    // Who the laptop hears talking (enrolled voices), refreshed every 2 s; unknown voices stay unlabelled.
+    if (!this.speakerTimer) {
+      this.speakerTimer = setInterval(() => {
+        fetch(`${hubUrl()}/speaker`)
+          .then((response) => (response.ok ? response.json() : null))
+          .then((body) => {
+            if (body && body.name) this.knownSpeaker = { name: body.name === 'YOU' ? 'YOU' : body.name, at: Date.now() };
+          })
+          .catch(() => {});
+      }, 2000);
+    }
     // onHostFocus does not always fire; keep trying to start the camera until it opens or is switched off.
     if (!this.handsTimer) {
       this.handsTimer = setInterval(() => {
@@ -253,6 +264,8 @@ export default {
     this.alertTimer = null;
     clearInterval(this.handsTimer);
     this.handsTimer = null;
+    clearInterval(this.speakerTimer);
+    this.speakerTimer = null;
     clearInterval(this.laptopTimer);
     this.laptopTimer = null;
     if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
@@ -287,6 +300,8 @@ export default {
     this.alertTimer = null;
     clearInterval(this.handsTimer);
     this.handsTimer = null;
+    clearInterval(this.speakerTimer);
+    this.speakerTimer = null;
     clearInterval(this.laptopTimer);
     this.laptopTimer = null;
     if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
@@ -420,6 +435,12 @@ export default {
       this.showBanner('! SOMEONE SAID YOUR NAME');
       postEvent('alert', 'SOMEONE SAID YOUR NAME', mark.confidence, 'name');
     }
+    // A voice the laptop recognises (enrolled on the dashboard) names the speaker outright.
+    if (this.knownSpeaker && Date.now() - this.knownSpeaker.at < 6000) {
+      mark.label = this.knownSpeaker.name;
+      this.renderCaptions();
+      return postEvent('caption', said, mark.confidence, mark.label);
+    }
     // One label request at a time; segments arriving meanwhile go unlabelled rather than queueing up.
     if (!this.scene || this.labeling) return postEvent('caption', said, mark.confidence);
     this.labeling = true;
@@ -462,7 +483,12 @@ export default {
         if (latest) postEvent('status', `alert poll: ${body.alerts.length} new, primed ${primed}, kind ${latest.kind}`);
         // kind "say" is the dashboard's demo fallback: speak the line instead of bannering it
         if (primed && latest && latest.kind === 'say') this.speakSentence(latest.label, 100);
-        else if (primed && latest) this.showBanner(ALERT_TEXT[latest.kind] || `! ${String(latest.kind).toUpperCase()}`);
+        else if (primed && latest) {
+          const text = ALERT_TEXT[latest.kind] || `! ${String(latest.kind).toUpperCase()}`;
+          // A stereo mic on the laptop (or a chest camera) can say which side a sound came from.
+          const arrow = { left: '<<< ', right: '', center: '^ ' }[latest.direction];
+          this.showBanner(latest.direction === 'right' ? `${text} >>>` : `${arrow || ''}${text}`);
+        }
       })
       .catch((error) => {
         // Report a failing poll to the laptop at most every 30 s so the cause is visible remotely.

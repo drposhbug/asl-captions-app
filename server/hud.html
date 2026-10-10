@@ -252,7 +252,9 @@ async function poll() {
     evNext = ev.next;
     render();
     const al = await (await fetch('/alerts?since=' + alNext)).json();
-    al.alerts.filter(a => a.kind !== 'say').forEach(a => onAlert(a.id, a.label));
+    // A stereo mic adds which side the sound came from.
+    const withSide = a => (a.direction === 'left' ? '<<< ' : a.direction === 'center' ? '^ ' : '') + a.label + (a.direction === 'right' ? ' >>>' : '');
+    al.alerts.filter(a => a.kind !== 'say').forEach(a => onAlert(a.id, withSide(a)));
     alNext = al.next;
     primed = true;
   } catch (err) { console.warn('poll failed', err); }

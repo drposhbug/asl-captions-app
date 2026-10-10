@@ -53,11 +53,12 @@ def add_event(ev):
     return ev
 
 
-def push_alert(kind, label, confidence):
+def push_alert(kind, label, confidence, direction=None):
     # alert and its mirror event share one id so the HUD can de-duplicate them
     with lock:
         ev = add_event({"type": "alert", "text": label, "confidence": round(confidence, 3), "label": kind, "at": now_ms()})
-        alerts.append({"id": ev["id"], "kind": kind, "label": label, "confidence": ev["confidence"], "at": ev["at"]})
+        alerts.append({"id": ev["id"], "kind": kind, "label": label, "confidence": ev["confidence"], "at": ev["at"],
+                       "direction": direction})  # 'left' | 'center' | 'right' | None (mono mic)
 
 
 # --- who is talking (speaker.py) -----------------------------------------------
@@ -296,6 +297,7 @@ class Handler(BaseHTTPRequestHandler):
 RATE = 16000
 WINDOW = int(0.975 * RATE)
 DEBOUNCE_S = 3.0
+MIC_SPACING_M = float(os.environ.get("MIC_SPACING_M", "0.08"))  # distance between the two mics for --stereo
 YAMNET_KINDS = {
     "Fire alarm": "fire_alarm", "Smoke detector, smoke alarm": "fire_alarm",
     "Siren": "siren", "Civil defense siren": "siren", "Police car (siren)": "siren",
@@ -371,10 +373,13 @@ def listen(use_yamnet):
     classify = yamnet_classifier() if use_yamnet else loudness_classifier()
     print("sound alerts on (%s)" % ("YAMNet" if use_yamnet else "loudness detector"))
     last = {}
-    with sd.InputStream(samplerate=RATE, channels=1, dtype="float32") as stream:
+    # --stereo: read both channels of a stereo mic (chest camera, laptop array) to tell which side a sound is on.
+    stereo_mode = "--stereo" in sys.argv
+    with sd.InputStream(samplerate=RATE, channels=2 if stereo_mode else 1, dtype="float32") as stream:
         while True:
             mic_on = True
-            wave = stream.read(WINDOW)[0][:, 0]
+            frames = stream.read(WINDOW)[0]
+            wave = frames.mean(axis=1) if stereo_mode else frames[:, 0]
             mic.append((time.time(), wave))
             hits = classify(wave)
             if getattr(classify, "speech", 0) >= 0.5:
@@ -383,7 +388,11 @@ def listen(use_yamnet):
                 t = time.time()
                 if t - last.get(kind, 0) >= DEBOUNCE_S:
                     last[kind] = t
-                    push_alert(kind, label, conf)
+                    side = None
+                    if stereo_mode:
+                        import direction
+                        side = direction.direction(frames, RATE, MIC_SPACING_M)[0]
+                    push_alert(kind, label, conf, side)
                     print("ALERT", kind, round(conf, 2))
                     if FORWARD_URL:
                         try:
