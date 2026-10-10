@@ -34,6 +34,7 @@ NAME_RE = re.compile(r"[A-Z0-9_-]{1,20}")  # enrolled voice names
 lock = threading.RLock()  # re-entrant: push_alert holds it around add_event
 events = deque(maxlen=500)
 alerts = deque(maxlen=500)
+captions = deque(maxlen=200)  # what the laptop mic heard (stt.py), polled by the glasses
 # Start from the clock so ids keep rising across hub restarts and clients never wait on a stale `since`.
 last_id = int(time.time() * 1000)
 
@@ -60,6 +61,32 @@ def push_alert(kind, label, confidence, direction=None, angle=None):
         alerts.append({"id": ev["id"], "kind": kind, "label": label, "confidence": ev["confidence"], "at": ev["at"],
                        "direction": direction,  # 'left' | 'center' | 'right' | None (mono mic)
                        "angle": angle})  # degrees, -90 (left) .. 0 (ahead) .. 90 (right); None (mono mic)
+
+
+def push_caption(text, name=None):
+    # caption event and its mirror share one id, like alerts
+    with lock:
+        ev = add_event({"type": "caption", "text": text, "confidence": None, "label": name or "MIC", "at": now_ms()})
+        captions.append({"id": ev["id"], "text": text, "label": name, "at": ev["at"]})
+
+
+def caption_utterance(wave, name):
+    import stt
+    try:
+        text = stt.transcribe(wave)
+    except HTTPError as e:
+        if e.code == 401:  # key lacks the speech_to_text permission: every call would fail, so stop asking
+            stt.DISABLED = True
+            print("laptop captions off: the ElevenLabs key needs the speech_to_text permission")
+        else:
+            print("stt failed:", e.code, e.read()[:200])
+        return
+    except Exception as e:  # laptop captions are a bonus; the glasses' own recognizer keeps going
+        print("stt failed:", e)
+        return
+    if text:
+        push_caption(text, name)
+        print("CAPTION", (name or "MIC") + ":", text)
 
 
 # --- who is talking (speaker.py) -----------------------------------------------
@@ -191,6 +218,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(404, {"error": "no camera frame yet"})
         if url.path == "/record":
             return self.relay("GET")
+        if url.path == "/captions":
+            items, nxt = since(captions, q)
+            return self.send(200, {"captions": items, "next": nxt})
         if url.path == "/speaker":
             return self.send(200, current_speaker())
         if url.path == "/speaker/profiles":
@@ -404,6 +434,11 @@ def listen(use_yamnet):
     last = {}
     # --stereo: read both channels of a stereo mic (chest camera, laptop array) to tell which side a sound is on.
     stereo_mode = "--stereo" in sys.argv
+    import numpy as np
+    import stt
+    use_stt, utterance = stt.available(), []
+    if use_stt:
+        print("laptop captions on (ElevenLabs Scribe)")
     with sd.InputStream(samplerate=RATE, channels=2 if stereo_mode else 1, dtype="float32") as stream:
         while True:
             mic_on = True
@@ -411,6 +446,13 @@ def listen(use_yamnet):
             wave = frames.mean(axis=1) if stereo_mode else frames[:, 0]
             mic.append((time.time(), wave))
             hits = classify(wave)
+            # Laptop captions: speech windows form one utterance, transcribed once it ends (or runs 12 s).
+            if use_stt and not stt.DISABLED and (getattr(classify, "speech", 0) >= 0.3 or utterance):
+                utterance.append(wave)
+                if getattr(classify, "speech", 0) < 0.3 or len(utterance) >= 12:
+                    threading.Thread(target=caption_utterance, args=(np.concatenate(utterance), current_speaker()["name"]),
+                                     daemon=True).start()
+                    utterance = []
             if getattr(classify, "speech", 0) >= 0.5:
                 if stereo_mode:  # in a group, which side the talker is on matters as much as who it is
                     import direction

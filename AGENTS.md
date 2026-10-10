@@ -16,6 +16,7 @@ An accessibility agent for Deaf and hard-of-hearing users on Rokid Glasses.
 - Polls the hub for sound alerts (fire alarm, siren, car horn, door knock) and shows a 6 s banner; also bannered when someone says the wearer's name.
 - With a stereo mic (`hub.py --stereo`, `server/direction.py`) the banner shows an arrow rotated to the exact angle (-90 left .. 90 right) and "45° LEFT"; two mics cannot tell front from behind. `POST /test-alert?angle=-45` tries it.
 - Labels who is speaking (e.g. "TSA AGENT:") from the camera scene and what was said, with a separate language-model session.
+- Laptop captions: the hub transcribes each utterance from the laptop/chest mic with ElevenLabs speech-to-text (`server/stt.py`, peak-normalised so quiet talkers come through; needs `ELEVENLABS_API_KEY`); the glasses poll `GET /captions` and show lines their own recognizer missed.
 - Marks captions with "?" when speech recognition reports low confidence (e.g. muffled PA announcements).
 - Falls back to a dictionary sentence (`pages/index/dictionary.js`) when the language model is offline; the signer taps to speak it.
 - Demo fallback: number keys on the hub dashboard (`DEMO_SCRIPT.md`) post `/say`; the glasses speak the line from the alert poll.

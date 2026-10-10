@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b7-arrow';
+const BUILD = 'b8-laptop-captions';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -236,6 +236,8 @@ export default {
           .catch(() => {});
       }, 2000);
     }
+    // Captions from the laptop's mic (hub + ElevenLabs): a second ear for talkers too quiet for the glasses.
+    if (!this.captionTimer) this.captionTimer = setInterval(() => this.pollCaptions(), 1000);
     // onHostFocus does not always fire; keep trying to start the camera until it opens or is switched off.
     if (!this.handsTimer) {
       this.handsTimer = setInterval(() => {
@@ -272,6 +274,8 @@ export default {
     this.handsTimer = null;
     clearInterval(this.speakerTimer);
     this.speakerTimer = null;
+    clearInterval(this.captionTimer);
+    this.captionTimer = null;
     clearInterval(this.laptopTimer);
     this.laptopTimer = null;
     if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
@@ -319,6 +323,8 @@ export default {
     this.handsTimer = null;
     clearInterval(this.speakerTimer);
     this.speakerTimer = null;
+    clearInterval(this.captionTimer);
+    this.captionTimer = null;
     clearInterval(this.laptopTimer);
     this.laptopTimer = null;
     if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
@@ -522,6 +528,42 @@ export default {
         }
       })
       .finally(() => { if (this.alertPolling === started) this.alertPolling = 0; });
+  },
+
+  pollCaptions() {
+    if (this.captionPolling && Date.now() - this.captionPolling < 5000) return;
+    const started = Date.now();
+    this.captionPolling = started;
+    fetch(`${hubUrl()}/captions?since=${this.captionSince || 0}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body) => {
+        if (!body || this.captionPolling !== started) return;
+        const primed = this.captionSince !== undefined; // the first poll only catches up
+        this.captionSince = body.next;
+        if (!primed) return;
+        for (const caption of body.captions || []) {
+          if (this.heardAlready(caption.text)) continue;
+          const key = `laptop:${caption.id}`;
+          this.segments.set(key, caption.text);
+          this.marks.set(key, { confidence: null, label: caption.label || '' });
+        }
+        this.renderCaptions();
+      })
+      .catch(() => {})
+      .finally(() => { if (this.captionPolling === started) this.captionPolling = 0; });
+  },
+
+  // The glasses usually hear the same sentence themselves: skip a laptop caption that mostly repeats a recent line.
+  heardAlready(text) {
+    const words = (t) => new Set((t || '').toLowerCase().match(/[a-z0-9']+/g) || []);
+    const mine = words(text);
+    if (!mine.size) return true;
+    return Array.from(this.segments.values()).slice(-3).some((said) => {
+      const theirs = words(said);
+      let shared = 0;
+      mine.forEach((w) => { if (theirs.has(w)) shared += 1; });
+      return shared / mine.size >= 0.6;
+    });
   },
 
   // An alarm takes over the whole display and flashes; a Deaf wearer must not be able to miss it.
