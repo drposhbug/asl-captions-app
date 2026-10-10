@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -68,6 +69,34 @@ def decode(jpeg_bytes):
     return bgr
 
 
+SEGMENT_SAMPLES = 6  # frames tracked per video segment, evenly spaced
+# The glasses camera records sideways (verified on real clips); rotate pieces upright before tracking.
+SEGMENT_ROTATE = {"ccw": cv2.ROTATE_90_COUNTERCLOCKWISE, "cw": cv2.ROTATE_90_CLOCKWISE, "none": None}[
+    os.environ.get("SEGMENT_ROTATE", "ccw")]
+
+
+def segment_frames(data, extension):
+    """Decodes a video segment and returns up to SEGMENT_SAMPLES evenly spaced upright frames."""
+    with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as file:
+        file.write(data)
+        path = file.name
+    try:
+        video = cv2.VideoCapture(path)
+        frames = []
+        while True:
+            ok, frame = video.read()
+            if not ok:
+                break
+            frames.append(frame)
+        video.release()
+    finally:
+        os.remove(path)
+    if len(frames) > SEGMENT_SAMPLES:
+        step = len(frames) / SEGMENT_SAMPLES
+        frames = [frames[min(len(frames) - 1, int((i + 1) * step) - 1)] for i in range(SEGMENT_SAMPLES)]
+    return [cv2.rotate(f, SEGMENT_ROTATE) if SEGMENT_ROTATE is not None else f for f in frames]
+
+
 def detect(pipeline, bgr):
     height, width = bgr.shape[:2]
     hands = []
@@ -86,6 +115,8 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path == "/clips":
             return self.save_clip()
+        if url.path == "/segment":
+            return self.process_segment()
         if url.path == "/record":
             q = parse_qs(url.query)
             label = q.get("label", [""])[0].strip().upper()
@@ -116,6 +147,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.server.pipeline is None:
             self.server.last = (bgr, [])  # the dashboard preview still shows the raw glasses feed
             return self.reply(503, {"error": "hand model not installed on the server"})
+        hands, sign = self.process_frame(bgr, body)
+        self.reply(200, {"hands": hands, "gloss": sign})
+
+    def process_frame(self, bgr, jpeg):
+        """Tracks hands in one clean frame; records training samples, classifies the sign, saves the frame."""
         hands = detect(self.server.pipeline, bgr)
         self.server.last = (bgr, hands)
         label, until = self.server.recording
@@ -125,13 +161,34 @@ class Handler(BaseHTTPRequestHandler):
         if signs.ready():
             sign = signs.predict(hands)
         else:
-            sign = gloss.predict(body) if hands else None
+            sign = gloss.predict(jpeg) if hands else None
         if hands and self.server.session_dir:
-            # Save the original bytes: the clean frame, exactly as the glasses camera saw it.
+            # Save the clean frame, exactly as the glasses camera saw it (after rotating upright).
             name = f"{time.time():.3f}.jpg"
             with open(os.path.join(self.server.session_dir, name), "wb") as file:
-                file.write(body)
-        self.reply(200, {"hands": hands, "gloss": sign})
+                file.write(jpeg)
+        return hands, sign
+
+    def process_segment(self):
+        """A 1-3 s video piece from the glasses: far smaller than photos, so captions keep their bandwidth."""
+        extension = CLIP_TYPES.get((self.headers.get("Content-Type") or "").split(";")[0].strip())
+        length = int(self.headers.get("Content-Length") or 0)
+        if not extension or not 0 < length <= MAX_BODY:
+            return self.reply(400, {"error": "send an mp4 or webm segment up to 15 MB"})
+        data = self.rfile.read(length)
+        if len(data) != length:
+            return self.reply(400, {"error": "segment upload cut off"})
+        frames = segment_frames(data, extension)
+        if not frames:
+            return self.reply(400, {"error": "segment has no decodable frames"})
+        if self.server.pipeline is None:
+            self.server.last = (frames[-1], [])
+            return self.reply(503, {"error": "hand model not installed on the server"})
+        hands, sign = [], None
+        for bgr in frames:
+            hands, frame_sign = self.process_frame(bgr, cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes())
+            sign = frame_sign or sign
+        self.reply(200, {"hands": hands, "gloss": sign, "frames": len(frames)})
 
     def save_clip(self):
         extension = CLIP_TYPES.get((self.headers.get("Content-Type") or "").split(";")[0].strip())
