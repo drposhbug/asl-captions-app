@@ -1,0 +1,14 @@
+{
+  "name": "ASL Captions",
+  "description": "Live speech-to-text captions for Deaf and hard-of-hearing users on Rokid Glasses.",
+  "pages": [
+    "pages/index/index"
+  ],
+  "permissions": [
+    "RECORD_AUDIO",
+    "CAMERA"
+  ],
+  "window": {
+    "navigationBarTitleText": "ASL Captions"
+  }
+}

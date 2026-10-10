@@ -1,0 +1,7 @@
+{
+  "name": "asl-agent",
+  "version": "1.0.0",
+  "description": "ASL accessibility agent for Rokid Glasses",
+  "main": "app.js",
+  "dependencies": {}
+}

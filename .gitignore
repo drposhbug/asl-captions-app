@@ -1,0 +1,6 @@
+node_modules/
+*.aix
+# Machine-local symlink created by `npx skills add`; the skill itself lives in .agents/
+.claude/
+.playwright-mcp/
+.aix/

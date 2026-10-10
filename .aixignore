@@ -1,0 +1,9 @@
+.git
+.agents
+.claude
+skills-lock.json
+.gitignore
+.gitattributes
+.aixignore
+.playwright-mcp
+store-media
