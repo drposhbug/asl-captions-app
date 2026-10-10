@@ -31,7 +31,7 @@ except ImportError as error:
     WILOR_IMPORT_ERROR = error
 
 PORT = 8765
-MAX_BODY = 5 * 1024 * 1024
+MAX_BODY = 15 * 1024 * 1024  # full-size photos from the glasses photo camera fallback
 MAX_CLIP = 300 * 1024 * 1024
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRAMES_DIR = os.path.join(HERE, "frames")
@@ -82,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length") or 0)
         if not 0 < length <= MAX_BODY:
-            return self.reply(400, {"error": "send a JPEG body up to 5 MB"})
+            return self.reply(400, {"error": "send a JPEG body up to 15 MB"})
         body = self.rfile.read(length)
         try:
             bgr = decode(body)

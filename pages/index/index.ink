@@ -101,8 +101,10 @@ function toLines(text) {
 }
 
 // Blob.arrayBuffer() is undocumented in this runtime; Response.arrayBuffer() is, so try both.
+// Frames are a Blob (video grab) or an ArrayBuffer (photo camera fallback).
 async function blobToBase64(blob) {
-  const buffer = typeof blob.arrayBuffer === 'function' ? await blob.arrayBuffer() : await new Response(blob).arrayBuffer();
+  const buffer = blob instanceof ArrayBuffer ? blob
+    : typeof blob.arrayBuffer === 'function' ? await blob.arrayBuffer() : await new Response(blob).arrayBuffer();
   return wx.arrayBufferToBase64(buffer);
 }
 
@@ -252,7 +254,8 @@ export default {
   showResult(event) {
     const result = event && event.results && event.results[event.resultIndex];
     const transcript = result && result[0] && result[0].transcript;
-    if (!transcript) return;
+    // The host sometimes ignores lang='en-US' and answers in Chinese; drop those results.
+    if (!transcript || /[㐀-鿿]/.test(transcript)) return;
     // Interim and final results for the same index replace each other.
     const key = `${event.sessionId}:${event.resultIndex}`;
     this.segments.set(key, transcript.trim());
@@ -470,27 +473,49 @@ export default {
     const ctx = wx.createCanvasContext('hands');
     try {
       if (!ctx) throw new Error('Hand overlay canvas is missing');
-      // Small frames keep upload and detection fast.
-      run.stream = await openCamera(640, 480);
-      if (!active()) return;
-      const capture = new ImageCapture(run.stream.getVideoTracks()[0]);
+      // Video-frame grabbing is missing on some glasses firmware; the wx photo camera (proven by the old
+      // photo test) works everywhere, so fall back to it on the first failure.
+      let useStream = typeof ImageCapture === 'function' && typeof createImageBlob === 'function';
+      let capture = null;
+      const camera = wx.media && wx.media.createCameraContext();
+      const nextFrame = async () => {
+        if (useStream) {
+          try {
+            if (!capture) {
+              // Small frames keep upload and detection fast.
+              run.stream = await openCamera(640, 480);
+              capture = new ImageCapture(run.stream.getVideoTracks()[0]);
+            }
+            const bitmap = await capture.grabFrame();
+            try {
+              return await createImageBlob(bitmap, { type: 'image/jpeg', quality: 0.6 });
+            } finally {
+              bitmap.close();
+            }
+          } catch (error) {
+            useStream = false;
+            releaseCamera(run);
+            postEvent('status', `frame grab failed, using photo camera: ${(error && error.message) || error}`);
+          }
+        }
+        if (!camera) throw new Error('Camera is unavailable');
+        const photo = await camera.takePhoto({ quality: 'low' });
+        if (!photo || !photo.data) throw new Error('Camera returned no image');
+        return photo.data;
+      };
       const started = Date.now();
       let frames = 0;
       while (active()) {
-        const bitmap = await capture.grabFrame();
-        let jpeg;
-        try {
-          jpeg = await createImageBlob(bitmap, { type: 'image/jpeg', quality: 0.6 });
-        } finally {
-          bitmap.close();
-        }
+        const jpeg = await nextFrame();
+        if (!active()) break;
         const response = await withTimeout(
           fetch(HAND_SERVER_URL, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: jpeg }),
           5000,
           'Hand server',
         );
-        if (!response.ok) throw new Error(`Hand server replied ${response.status}`);
-        const { hands, gloss } = await response.json();
+        // 503 = the server has no hand model yet; keep streaming so the dashboard still mirrors the camera.
+        if (!response.ok && response.status !== 503) throw new Error(`Hand server replied ${response.status}`);
+        const { hands = [], gloss = null } = response.ok ? await response.json() : {};
         if (!active()) break;
         this.drawHands(ctx, hands);
         this.onGlossFrame(gloss, jpeg);
@@ -501,7 +526,11 @@ export default {
       }
     } catch (error) {
       // Stopping releases the camera mid-frame; that failure is expected, not worth showing.
-      if (active()) this.setData({ handStatus: `\u2715 HANDS FAILED \u00B7 ${(error && error.message) || error}` });
+      if (active()) {
+        const message = (error && error.message) || String(error);
+        this.setData({ handStatus: `\u2715 HANDS FAILED \u00B7 ${message}` });
+        postEvent('status', `hands failed: ${message}`);
+      }
     } finally {
       releaseCamera(run);
       if (active()) this.handRun = null;
