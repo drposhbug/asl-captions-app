@@ -48,6 +48,9 @@ const NAME_PATTERN = new RegExp(`\\b${USER_NAME}\\b`, 'i');
 const BANNER_MS = 6000;
 // A quick phrase stays armed for the next tap this long after the last swipe.
 const QUICK_PHRASE_MS = 8000;
+// A nod or shake is only an answer if someone asked something this recently (or a sentence is waiting on screen).
+const QUESTION_WINDOW_MS = 10000;
+const QUESTION_RE = /\?\s*$|^(do|does|did|are|is|can|could|would|will|should|have|has|was|were|what|where|when|who|why|how|any|anything)\b/i;
 const QUICK_PHRASES = [
   "I'm deaf, please face me so I can read you.",
   'Please write it down or type it on your phone.',
@@ -310,6 +313,7 @@ export default {
     // Interim and final results for the same index replace each other.
     const key = `${event.sessionId}:${event.resultIndex}`;
     this.segments.set(key, transcript.trim());
+    this.lastHeard = { text: transcript.trim(), at: Date.now() };
     // Confidence is undocumented here; when it is missing, leave the line unmarked.
     const mark = this.marks.get(key) || {};
     mark.confidence = typeof result[0].confidence === 'number' ? result[0].confidence : null;
@@ -399,11 +403,18 @@ export default {
   onHeadGesture(event) {
     const gesture = event && event.gesture;
     if (gesture === 'nod') {
-      if (!this.confirmShown()) this.speakSentence('Yes.', 100);
+      if (this.confirmShown()) return;
+      if (this.heardQuestion()) this.speakSentence('Yes.', 100);
     } else if (gesture === 'shake') {
       if (this.data.quickPhrase || this.pendingSentence) this.dismissShown();
-      else this.speakSentence('No.', 100);
+      else if (this.heardQuestion()) this.speakSentence('No.', 100);
     }
+    // Otherwise the wearer is just looking around: say nothing.
+  },
+
+  heardQuestion() {
+    const heard = this.lastHeard;
+    return Boolean(heard && Date.now() - heard.at < QUESTION_WINDOW_MS && QUESTION_RE.test(heard.text));
   },
 
   // Speaks the quick phrase or pending sentence on screen; returns false when there is none.
