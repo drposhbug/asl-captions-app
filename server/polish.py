@@ -17,8 +17,26 @@ SYSTEM = (
     "The recognizer often emits a word twice or as two similar-sounding guesses "
     "(e.g. 'phrase verse' when only 'phrase' was said): keep the one that fits and drop the other. "
     "Keep the speaker's meaning and wording; never add new content or answer the speaker. "
-    "Earlier lines are context only. Reply with only the cleaned caption, nothing else."
+    "Earlier lines are context only. If an image is attached it is what the wearer is looking at right now: "
+    "use it to resolve names, numbers, places and objects. A location, when given, says roughly where the wearer is "
+    "(e.g. an airport or a cafe); use it the same way. Reply with only the cleaned caption, nothing else."
 )
+FRAME_URL = "http://127.0.0.1:8765/frame.jpg"  # the glasses' latest camera frame, via the hand server
+FRAME_MAX_AGE_S = 15
+
+
+def latest_frame():
+    """Base64 JPEG of what the glasses see now, or None if the camera is off or the frame is stale."""
+    import base64
+    from urllib.request import urlopen
+
+    try:
+        with urlopen(FRAME_URL, timeout=1) as r:
+            if float(r.headers.get("X-Frame-Age", "1e9")) > FRAME_MAX_AGE_S:
+                return None
+            return base64.b64encode(r.read()).decode()
+    except Exception:
+        return None
 
 _client = None
 
@@ -31,13 +49,23 @@ def available():
     return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 
-def build_prompt(text, context):
-    lines = [f"Earlier: {c}" for c in context[-3:] if c]
+def build_prompt(text, context, location=""):
+    lines = [f"Wearer location (lat, lon): {location}"] if location else []
+    lines += [f"Earlier: {c}" for c in context[-3:] if c]
     lines.append(f"Caption: {text}")
     return "\n".join(lines)
 
 
-def clean(text, context=()):
+def content(text, context, frame_b64, location=""):
+    """User content: the scene image first (when fresh), then the caption and its context."""
+    blocks = []
+    if frame_b64:
+        blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": frame_b64}})
+    blocks.append({"type": "text", "text": build_prompt(text, context, location)})
+    return blocks
+
+
+def clean(text, context=(), location=""):
     """Returns the cleaned caption, or the original text when Claude declines or returns nothing."""
     global _client
     import anthropic
@@ -49,7 +77,7 @@ def clean(text, context=()):
         max_tokens=2048,  # room for adaptive thinking; the caption itself is a line
         system=SYSTEM,
         output_config={"effort": "low"},
-        messages=[{"role": "user", "content": build_prompt(text, list(context))}],
+        messages=[{"role": "user", "content": content(text, list(context), latest_frame(), location)}],
     )
     if MODEL in FALLBACK_MODELS:
         response = _client.beta.messages.create(betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs)
@@ -66,6 +94,9 @@ def selftest():
         "Earlier: Hi there.\nEarlier: How are you?\nCaption: phrase verse"
     )
     assert build_prompt("ok", []) == "Caption: ok"
+    assert build_prompt("ok", [], "1.0, 2.0") == "Wearer location (lat, lon): 1.0, 2.0\nCaption: ok"
+    assert [b["type"] for b in content("ok", [], None)] == ["text"]
+    assert [b["type"] for b in content("ok", [], "AAAA")] == ["image", "text"]
     print("selftest ok")
 
 

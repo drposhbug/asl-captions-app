@@ -25,12 +25,15 @@ class Forward(BaseHTTPRequestHandler):
         try:
             with urlopen(Request(TARGET + path, data=body, headers=headers, method=self.command), timeout=30) as r:
                 status, ctype, data = r.status, r.headers.get("Content-Type", ""), r.read()
+                age = r.headers.get("X-Frame-Age")
         except HTTPError as e:
-            status, ctype, data = e.code, e.headers.get("Content-Type", ""), e.read()
+            status, ctype, data, age = e.code, e.headers.get("Content-Type", ""), e.read(), None
         except OSError as e:  # WiLoR server not up yet
-            status, ctype, data = 502, "application/json", ('{"error": "hand model server unreachable: %s"}' % e).encode()
+            status, ctype, data, age = 502, "application/json", ('{"error": "hand model server unreachable: %s"}' % e).encode(), None
         self.send_response(status)
         self.send_header("Content-Type", ctype)
+        if age:  # lets the hub skip stale camera frames when adding scene context
+            self.send_header("X-Frame-Age", age)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()

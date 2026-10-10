@@ -36,6 +36,13 @@
 <body>
 <div id="banner" role="alert" hidden></div>
 <button id="arm">ARM ALERTS</button>
+<button id="testAlarm" style="margin-left:8px">TEST ALARM</button>
+<script>
+  // Fires a fake fire alarm through the hub: the glasses banner it and every armed phone flashes and buzzes.
+  document.getElementById('testAlarm').onclick = function () {
+    fetch('/test-alert', { method: 'POST' }).catch(function () {});
+  };
+</script>
 <h2>Sentence</h2>
 <div id="sentence" aria-live="polite"></div>
 <div class="bar"><div class="track"><div class="fill" id="conf"></div></div><span id="pct"></span></div>

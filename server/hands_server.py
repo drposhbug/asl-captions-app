@@ -146,6 +146,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400, {"error": str(error)})
         if self.server.pipeline is None:
             self.server.last = (bgr, [])  # the dashboard preview still shows the raw glasses feed
+            self.server.last_at = time.time()
             return self.reply(503, {"error": "hand model not installed on the server"})
         hands, sign = self.process_frame(bgr, body)
         self.reply(200, {"hands": hands, "gloss": sign})
@@ -154,6 +155,7 @@ class Handler(BaseHTTPRequestHandler):
         """Tracks hands in one clean frame; records training samples, classifies the sign, saves the frame."""
         hands = detect(self.server.pipeline, bgr)
         self.server.last = (bgr, hands)
+        self.server.last_at = time.time()
         label, until = self.server.recording
         if hands and label and time.time() < until:
             signs.add_sample(label, hands)
@@ -183,6 +185,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400, {"error": "segment has no decodable frames"})
         if self.server.pipeline is None:
             self.server.last = (frames[-1], [])
+            self.server.last_at = time.time()
             return self.reply(503, {"error": "hand model not installed on the server"})
         hands, sign, per_frame = [], None, []
         for bgr in frames:
@@ -212,10 +215,14 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path == "/record":
             label, until = self.server.recording
             return self.reply(200, {"recording": label if time.time() < until else None, "counts": signs.counts()})
-        if urlparse(self.path).path != "/preview.jpg" or self.server.last is None:
+        path = urlparse(self.path).path
+        if path not in ("/preview.jpg", "/frame.jpg") or self.server.last is None:
             return self.reply(404, {"error": "no frame yet"})
         bgr, hands = self.server.last
         frame = bgr.copy()
+        if path == "/frame.jpg":  # the clean frame (no skeleton), for scene context
+            hands = []
+            frame = cv2.resize(frame, None, fx=0.5, fy=0.5) if max(frame.shape[:2]) > 1000 else frame
         height, width = frame.shape[:2]
         for hand in hands:
             points = [(int(x * width), int(y * height)) for x, y in hand["points"]]
@@ -229,6 +236,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(jpeg)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Frame-Age", f"{time.time() - self.server.last_at:.1f}")
         self.end_headers()
         self.wfile.write(jpeg.tobytes())
 
@@ -264,6 +272,7 @@ if __name__ == "__main__":
         server = HTTPServer(("0.0.0.0", PORT), Handler)
         server.pipeline = load_pipeline()
         server.last = None
+        server.last_at = 0
         server.recording = (None, 0)  # (label, until epoch s) for POST /record
         server.session_dir = None
         if "--save-frames" in sys.argv:

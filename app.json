@@ -6,7 +6,8 @@
   ],
   "permissions": [
     "RECORD_AUDIO",
-    "CAMERA"
+    "CAMERA",
+    "GEOLOCATION"
   ],
   "window": {
     "navigationBarTitleText": "ASL Captions"

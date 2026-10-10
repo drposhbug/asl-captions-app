@@ -219,6 +219,17 @@ export default {
     // Re-probe until the laptop answers, and again every 30 s in case the Wi-Fi changed.
     if (!this.laptopTimer) this.laptopTimer = setInterval(() => findLaptop(), 30000);
     findLaptop().then((found) => this.setData({ laptopStatus: found ? `LAPTOP ${laptop}` : 'LAPTOP NOT FOUND' }));
+    // Rough location as caption-cleanup context (an airport, a cafe); denial just means no location.
+    if (this.locationWatch == null && typeof navigator !== 'undefined' && navigator.geolocation) {
+      this.locationWatch = navigator.geolocation.watchPosition(
+        (position) => {
+          const { latitude, longitude, accuracy } = position.coords;
+          this.location = `${latitude.toFixed(4)}, ${longitude.toFixed(4)} (within ${Math.round(accuracy)} m)`;
+        },
+        () => {},
+        { enableHighAccuracy: false, maximumAge: 60000, timeout: 20000 },
+      );
+    }
   },
 
   onHide() {
@@ -230,6 +241,8 @@ export default {
     this.alertTimer = null;
     clearInterval(this.laptopTimer);
     this.laptopTimer = null;
+    if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
+    this.locationWatch = null;
   },
 
   // Wakeup ("Hi Rokid" or touch) belongs to captions here, not the system assistant.
@@ -259,6 +272,8 @@ export default {
     this.alertTimer = null;
     clearInterval(this.laptopTimer);
     this.laptopTimer = null;
+    if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
+    this.locationWatch = null;
     clearTimeout(this.bannerTimer);
     clearTimeout(this.quickTimer);
     if (this.grammar) this.grammar.destroy();
@@ -359,7 +374,7 @@ export default {
     fetch(`${hubUrl()}/polish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, context }),
+      body: JSON.stringify({ text, context, location: this.location || null }),
     })
       .then((response) => (response.ok ? response.json() : null))
       .then((body) => {

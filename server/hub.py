@@ -199,13 +199,14 @@ class Handler(BaseHTTPRequestHandler):
                 a = json.loads(self.rfile.read(length))
                 text = str(a["text"])[:500]
                 context = [str(c)[:300] for c in a.get("context", [])][-3:]
+                location = str(a.get("location") or "")[:80]
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 return self.send(400, {"error": "polish needs text: %s" % e})
             import polish
             if not polish.available():
                 return self.send(503, {"error": "set ANTHROPIC_API_KEY and pip install anthropic"})
             try:
-                cleaned = polish.clean(text, context)
+                cleaned = polish.clean(text, context, location)
             except Exception as e:  # any API failure: the glasses keep the raw caption
                 print("polish failed:", e)
                 return self.send(502, {"error": str(e)[:200]})
