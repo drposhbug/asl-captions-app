@@ -17,12 +17,26 @@ const SCENE_REFRESH_MS = 15000;
 const MAX_CHARS_PER_LINE = 28;
 const MAX_LINES = 4;
 // The laptop running server/hands_server.py; the glasses and laptop must share a network.
-const SERVER_URL = 'http://172.16.241.181:8765';
-// server/hub.py on the same laptop: receives the conversation log and detects sounds (alarms, sirens, knocks).
-const HUB_URL = `http://172.16.241.181:8766`;
-const HAND_SERVER_URL = `${SERVER_URL}/hands`;
-// Clips go to the laptop for HaWoR (server/run_hawor.py) and Roboflow frames.
-const CLIP_UPLOAD_URL = `${SERVER_URL}/clips`;
+// The laptop's address on each Wi-Fi we use (hackathon, Verizon hotspot); the first one whose hub answers wins.
+const LAPTOP_IPS = ['192.168.0.172', '172.16.241.181'];
+let laptop = LAPTOP_IPS[0];
+const hubUrl = () => `http://${laptop}:8766`;
+const handUrl = () => `http://${laptop}:8765/hands`;
+const clipUrl = () => `http://${laptop}:8765/clips`;
+
+// Probes every candidate hub in parallel; resolves true when one answers so the page can start posting.
+function findLaptop() {
+  return new Promise((resolve) => {
+    let pending = LAPTOP_IPS.length;
+    LAPTOP_IPS.forEach((ip) => {
+      wx.request({
+        url: `http://${ip}:8766/events?since=0`, timeout: 2500, responseType: 'text',
+        success: (res) => { if (res.statusCode === 200) { laptop = ip; resolve(true); } },
+        complete: () => { pending -= 1; if (!pending) resolve(false); },
+      });
+    });
+  });
+}
 const MAX_CLIP_MS = 60000;
 // shortcut: maps the whole camera frame onto the display; the camera sees far wider than the display,
 // so the skeleton won't line up with your real hands. Raise above 1 (crop to centre) to calibrate on device.
@@ -126,7 +140,7 @@ async function blobToBase64(blob) {
 
 // The hub is a nice-to-have log; it must never slow down or break the glasses UI.
 function postEvent(type, text, confidence = null, label = null) {
-  fetch(`${HUB_URL}/events`, {
+  fetch(`${hubUrl()}/events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, text, confidence, label, at: Date.now() }),
@@ -146,6 +160,7 @@ export default {
     error: '',
     clipStatus: '',
     handStatus: '',
+    laptopStatus: '',
     glossText: '',
     sentence: '',
     sentenceStatus: '',
@@ -176,6 +191,9 @@ export default {
     this.visible = true;
     this.startCaptions();
     if (!this.alertTimer) this.alertTimer = setInterval(() => this.pollAlerts(), 1000);
+    // Re-probe until the laptop answers, and again every 30 s in case the Wi-Fi changed.
+    if (!this.laptopTimer) this.laptopTimer = setInterval(() => findLaptop(), 30000);
+    findLaptop().then((found) => this.setData({ laptopStatus: found ? `LAPTOP ${laptop}` : 'LAPTOP NOT FOUND' }));
   },
 
   onHide() {
@@ -185,6 +203,8 @@ export default {
     this.stopRecording();
     clearInterval(this.alertTimer);
     this.alertTimer = null;
+    clearInterval(this.laptopTimer);
+    this.laptopTimer = null;
   },
 
   // Wakeup ("Hi Rokid" or touch) belongs to captions here, not the system assistant.
@@ -212,6 +232,8 @@ export default {
     this.stopRecording();
     clearInterval(this.alertTimer);
     this.alertTimer = null;
+    clearInterval(this.laptopTimer);
+    this.laptopTimer = null;
     clearTimeout(this.bannerTimer);
     clearTimeout(this.quickTimer);
     if (this.grammar) this.grammar.destroy();
@@ -237,7 +259,8 @@ export default {
         if (isNotInteractive(event)) return this.setData({ listening: false });
         const message = (event && (event.message || event.error)) || 'Speech error';
         // "Cloud ASR can't accept audio" is a transient hiccup (mic busy or a dropped upload): let onend retry.
-        if (/accept audio|queue|full|audio-capture|network|no-speech/i.test(message)) {
+        // Also socket/timeout/abort: the glasses' internet dropped; keep retrying until it is back.
+        if (/accept audio|queue|full|audio-capture|network|no-speech|socket|timeout|abort/i.test(message)) {
           postEvent('status', `speech: ${message}`);
           return this.setData({ listening: false });
         }
@@ -341,7 +364,7 @@ export default {
   pollAlerts() {
     if (this.alertPolling) return;
     this.alertPolling = true;
-    fetch(`${HUB_URL}/alerts?since=${this.alertSince || 0}`)
+    fetch(`${hubUrl()}/alerts?since=${this.alertSince || 0}`)
       .then((response) => (response.ok ? response.json() : null))
       .then((body) => {
         if (!body) return;
@@ -471,7 +494,7 @@ export default {
       // The upload saturates the Wi-Fi; keep the mic's audio stream off it until the clip is through.
       this.uploading = true;
       this.stopCaptions();
-      const { saved } = await postBinary(CLIP_UPLOAD_URL, clip, type, 120000);
+      const { saved } = await postBinary(clipUrl(), clip, type, 120000);
       this.setData({ clipStatus: `OK - CLIP SAVED - ${saved}` });
     } catch (error) {
       const message = (error && error.message) || String(error);
@@ -548,7 +571,7 @@ export default {
         const jpeg = await nextFrame();
         if (!active()) break;
         // 503 = the server has no hand model yet; keep streaming so the dashboard still mirrors the camera.
-        const { hands = [], gloss = null } = await postBinary(HAND_SERVER_URL, jpeg, 'image/jpeg', 30000, [503]);
+        const { hands = [], gloss = null } = await postBinary(handUrl(), jpeg, 'image/jpeg', 30000, [503]);
         if (!active()) break;
         this.drawHands(ctx, hands);
         this.onGlossFrame(gloss, jpeg);
@@ -693,7 +716,7 @@ export default {
       <text class="banner-text">{{banner}}</text>
     </view>
     <view class="status-row">
-      <text class="status">{{ listening ? 'LISTENING' : 'MIC OFF' }}</text>
+      <text class="status">{{ (listening ? 'LISTENING' : 'MIC OFF') + (laptopStatus ? ' - ' + laptopStatus : '') }}</text>
       <view class="actions">
         <button class="action" bindtap="nextQuickPhrase">{{ 'UP: PHRASE' }}</button>
         <button class="action" bindtap="toggleHands">{{ 'DOWN: HANDS' }}</button>
