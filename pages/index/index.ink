@@ -42,10 +42,10 @@ const QUICK_PHRASES = [
   'I need help, please call someone who can sign.',
 ];
 const ALERT_TEXT = {
-  fire_alarm: '\u25B2 FIRE ALARM',
-  siren: '\u25B2 SIREN',
-  car_horn: '\u25B2 CAR HORN',
-  door_knock: '\u25B2 DOOR KNOCK',
+  fire_alarm: '! FIRE ALARM',
+  siren: '! SIREN',
+  car_horn: '! CAR HORN',
+  door_knock: '! DOOR KNOCK',
 };
 // Below this recognition confidence (e.g. a muffled PA announcement) the caption is marked "?".
 const LOW_CAPTION_CONFIDENCE = 0.6;
@@ -283,7 +283,7 @@ export default {
     if (!said) return;
     const mark = this.marks.get(key) || {};
     if (NAME_PATTERN.test(said)) {
-      this.showBanner('\u25B2 SOMEONE SAID YOUR NAME');
+      this.showBanner('! SOMEONE SAID YOUR NAME');
       postEvent('alert', 'SOMEONE SAID YOUR NAME', mark.confidence, 'name');
     }
     // One label request at a time; segments arriving meanwhile go unlabelled rather than queueing up.
@@ -324,7 +324,7 @@ export default {
         const latest = body.alerts && body.alerts[body.alerts.length - 1];
         // kind "say" is the dashboard's demo fallback: speak the line instead of bannering it
         if (primed && latest && latest.kind === 'say') this.speakSentence(latest.label, 100);
-        else if (primed && latest) this.showBanner(ALERT_TEXT[latest.kind] || `\u25B2 ${String(latest.kind).toUpperCase()}`);
+        else if (primed && latest) this.showBanner(ALERT_TEXT[latest.kind] || `! ${String(latest.kind).toUpperCase()}`);
       })
       .catch(() => {})
       .finally(() => { this.alertPolling = false; });
@@ -409,7 +409,7 @@ export default {
     if (this.recording) return;
     this.recording = true;
     this.stopHands(); // one camera user at a time
-    this.setData({ clipStatus: 'REC \u00B7 STARTING CAMERA\u2026' });
+    this.setData({ clipStatus: 'REC - STARTING CAMERA...' });
     let stream = null;
     let limit = null;
     try {
@@ -431,7 +431,7 @@ export default {
       const started = Date.now();
       recorder.start();
       limit = setTimeout(() => this.stopRecording(), MAX_CLIP_MS);
-      this.setData({ clipStatus: `\u25CF REC \u00B7 TAP TO STOP (MAX ${MAX_CLIP_MS / 1000}s)` });
+      this.setData({ clipStatus: `REC - TAP TO STOP (MAX ${MAX_CLIP_MS / 1000}s)` });
       await stopped;
       this.recorder = null;
       stream.getTracks().forEach((track) => track.stop());
@@ -440,7 +440,7 @@ export default {
       const type = mimeType.split(';')[0];
       const clip = chunks.length === 1 || typeof Blob !== 'function' ? chunks[0] : new Blob(chunks, { type });
       const seconds = Math.round((Date.now() - started) / 1000);
-      this.setData({ clipStatus: `UPLOADING ${seconds}s CLIP \u00B7 ${Math.round((clip.size || 0) / 1024)} KB\u2026` });
+      this.setData({ clipStatus: `UPLOADING ${seconds}s CLIP - ${Math.round((clip.size || 0) / 1024)} KB...` });
       const response = await withTimeout(
         fetch(CLIP_UPLOAD_URL, { method: 'POST', headers: { 'Content-Type': type }, body: clip }),
         60000,
@@ -448,10 +448,10 @@ export default {
       );
       if (!response.ok) throw new Error(`Server replied ${response.status}`);
       const { saved } = await response.json();
-      this.setData({ clipStatus: `\u2713 CLIP SAVED \u00B7 ${saved}` });
+      this.setData({ clipStatus: `OK - CLIP SAVED - ${saved}` });
     } catch (error) {
       const message = (error && error.message) || String(error);
-      this.setData({ clipStatus: `\u2715 CLIP FAILED \u00B7 ${message}` });
+      this.setData({ clipStatus: `X - CLIP FAILED - ${message}` });
       postEvent('status', `clip failed: ${message}`);
     } finally {
       clearTimeout(limit);
@@ -474,7 +474,7 @@ export default {
     // A token per run: a stopped loop still awaiting a frame must not touch a newer run.
     const run = (this.handRun = {});
     const active = () => this.handRun === run;
-    this.setData({ handStatus: 'HANDS \u00B7 STARTING CAMERA\u2026' });
+    this.setData({ handStatus: 'HANDS - STARTING CAMERA...' });
     const ctx = wx.createCanvasContext('hands');
     try {
       if (!ctx) throw new Error('Hand overlay canvas is missing');
@@ -527,13 +527,13 @@ export default {
         frames += 1;
         const fps = (frames * 1000) / (Date.now() - started);
         const seen = gloss ? `${gloss.label} ${Math.round(gloss.confidence * 100)}%` : `${hands.length} SEEN`;
-        this.setData({ handStatus: `HANDS \u00B7 ${seen} \u00B7 ${fps.toFixed(1)} FPS` });
+        this.setData({ handStatus: `HANDS - ${seen} - ${fps.toFixed(1)} FPS` });
       }
     } catch (error) {
       // Stopping releases the camera mid-frame; that failure is expected, not worth showing.
       if (active()) {
         const message = (error && error.message) || String(error);
-        this.setData({ handStatus: `\u2715 HANDS FAILED \u00B7 ${message}` });
+        this.setData({ handStatus: `X - HANDS FAILED - ${message}` });
         postEvent('status', `hands failed: ${message}`);
       }
     } finally {
@@ -564,7 +564,7 @@ export default {
       }
     }
     const finished = this.glossStream.endSentence(now);
-    if (finished) this.fillSentence(finished).catch((error) => this.setData({ sentenceStatus: `\u2715 ${(error && error.message) || error}` }));
+    if (finished) this.fillSentence(finished).catch((error) => this.setData({ sentenceStatus: `X - ${(error && error.message) || error}` }));
   },
 
   async getGrammar() {
@@ -594,7 +594,7 @@ export default {
 
   async fillSentence(glosses) {
     this.pendingSentence = null;
-    this.setData({ sentence: '', sentencePercent: 0, sentenceStatus: 'FILLING\u2026' });
+    this.setData({ sentence: '', sentencePercent: 0, sentenceStatus: 'FILLING...' });
     const speech = Array.from(this.segments.values()).slice(-3).join(' ').slice(-300);
     let result = null;
     try {
@@ -610,7 +610,7 @@ export default {
     } else {
       this.pendingSentence = result.sentence;
       this.pendingPercent = percent;
-      const sentenceStatus = offline ? 'OFFLINE \u00B7 TAP TO SAY IT' : `${percent}% SURE \u00B7 TAP TO SAY IT`;
+      const sentenceStatus = offline ? 'OFFLINE - TAP TO SAY IT' : `${percent}% SURE - TAP TO SAY IT`;
       this.setData({ sentence: result.sentence, sentencePercent: percent, sentenceStatus });
       postEvent('sentence', result.sentence, result.confidence);
     }
@@ -619,7 +619,7 @@ export default {
   speakSentence(sentence, percent) {
     this.pendingSentence = null;
     speechSynthesis.speak(new SpeechSynthesisUtterance(sentence), 'immediate');
-    this.setData({ glossText: '', sentence, sentencePercent: percent || 0, sentenceStatus: percent ? `SPOKEN \u00B7 ${percent}% SURE` : 'SPOKEN' });
+    this.setData({ glossText: '', sentence, sentencePercent: percent || 0, sentenceStatus: percent ? `SPOKEN - ${percent}% SURE` : 'SPOKEN' });
     postEvent('sentence', sentence, percent ? percent / 100 : null);
   },
 
@@ -659,16 +659,16 @@ export default {
       <text class="banner-text">{{banner}}</text>
     </view>
     <view class="status-row">
-      <text class="status">{{ listening ? '\u25CF LISTENING' : '\u25CB MIC OFF' }}</text>
+      <text class="status">{{ listening ? 'LISTENING' : 'MIC OFF' }}</text>
       <view class="actions">
-        <button class="action" bindtap="nextQuickPhrase">{{ '\u2191 PHRASE' }}</button>
-        <button class="action" bindtap="toggleHands">{{ '\u2193 HANDS' }}</button>
-        <button class="action" bindtap="toggleRecording">{{ 'TAP \u00B7 RECORD' }}</button>
+        <button class="action" bindtap="nextQuickPhrase">{{ 'UP: PHRASE' }}</button>
+        <button class="action" bindtap="toggleHands">{{ 'DOWN: HANDS' }}</button>
+        <button class="action" bindtap="toggleRecording">{{ 'TAP - RECORD' }}</button>
       </view>
     </view>
 
     <view class="signing" ink:if="{{glossText || sentence}}">
-      <text class="gloss-text" ink:if="{{glossText}}">{{ 'SIGNED \u00B7 ' + glossText }}</text>
+      <text class="gloss-text" ink:if="{{glossText}}">{{ 'SIGNED - ' + glossText }}</text>
       <text class="sentence-text" ink:if="{{sentence}}">{{sentence}}</text>
       <view class="bar" ink:if="{{sentence && sentencePercent}}"><view class="bar-fill" style="width: {{sentencePercent}}%"></view></view>
       <text class="photo-status" ink:if="{{sentenceStatus}}">{{sentenceStatus}}</text>
@@ -676,17 +676,17 @@ export default {
 
     <view class="signing" ink:if="{{quickPhrase}}">
       <text class="quick-phrase">{{quickPhrase}}</text>
-      <text class="photo-status">{{ 'TAP TO SAY \u00B7 \u2191 NEXT' }}</text>
+      <text class="photo-status">{{ 'TAP TO SAY - UP: NEXT' }}</text>
     </view>
 
     <view class="captions">
       <text class="caption-text" ink:for="{{lines}}">{{item}}</text>
-      <text class="caption-empty" ink:if="{{!lines.length}}">{{ listening ? 'Waiting for speech\u2026' : 'Wake the glasses to start captions' }}</text>
+      <text class="caption-empty" ink:if="{{!lines.length}}">{{ listening ? 'Waiting for speech...' : 'Wake the glasses to start captions' }}</text>
     </view>
 
     <view class="error" ink:if="{{error}}">
-      <text class="error-text">{{ '\u25B2 ERROR \u00B7 ' + error }}</text>
-      <button class="action" bindtap="retryCaptions">{{ '\u2191 RETRY' }}</button>
+      <text class="error-text">{{ '! ERROR - ' + error }}</text>
+      <button class="action" bindtap="retryCaptions">{{ 'UP: RETRY' }}</button>
     </view>
 
     <text class="photo-status" ink:if="{{clipStatus}}">{{clipStatus}}</text>

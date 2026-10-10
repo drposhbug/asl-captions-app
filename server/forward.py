@@ -9,6 +9,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 LISTEN_PORT = 8765
@@ -18,8 +19,11 @@ TARGET = "http://127.0.0.1:8767"
 class Forward(BaseHTTPRequestHandler):
     def relay(self, body=None):
         headers = {k: v for k, v in self.headers.items() if k.lower() in ("content-type",)}
+        # The glasses send an absolute URL as the request path; keep only path + query.
+        url = urlparse(self.path)
+        path = url.path + ("?" + url.query if url.query else "")
         try:
-            with urlopen(Request(TARGET + self.path, data=body, headers=headers, method=self.command), timeout=30) as r:
+            with urlopen(Request(TARGET + path, data=body, headers=headers, method=self.command), timeout=30) as r:
                 status, ctype, data = r.status, r.headers.get("Content-Type", ""), r.read()
         except HTTPError as e:
             status, ctype, data = e.code, e.headers.get("Content-Type", ""), e.read()

@@ -102,7 +102,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, signs.train())
             except ValueError as error:
                 return self.reply(400, {"error": str(error)})
-        if self.path != "/hands":
+        # Some clients (the glasses) send an absolute URL as the request path; compare the path part only.
+        if url.path != "/hands":
             return self.reply(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length") or 0)
         if not 0 < length <= MAX_BODY:
@@ -146,10 +147,10 @@ class Handler(BaseHTTPRequestHandler):
 
     # The last glasses frame with the skeleton drawn on it, for the dashboard (and overlay calibration).
     def do_GET(self):
-        if self.path.split("?")[0] == "/record":
+        if urlparse(self.path).path == "/record":
             label, until = self.server.recording
             return self.reply(200, {"recording": label if time.time() < until else None, "counts": signs.counts()})
-        if self.path.split("?")[0] != "/preview.jpg" or self.server.last is None:
+        if urlparse(self.path).path != "/preview.jpg" or self.server.last is None:
             return self.reply(404, {"error": "no frame yet"})
         bgr, hands = self.server.last
         frame = bgr.copy()
