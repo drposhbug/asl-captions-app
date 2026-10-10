@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b1-autostart';
+const BUILD = 'b2-diagnostics';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -219,6 +219,12 @@ export default {
     this.visible = true;
     this.startCaptions();
     if (!this.alertTimer) this.alertTimer = setInterval(() => this.pollAlerts(), 1000);
+    // onHostFocus does not always fire; keep trying to start the camera until it opens or is switched off.
+    if (!this.handsTimer) {
+      this.handsTimer = setInterval(() => {
+        if (this.visible && !this.handRun && !this.recording && !this.handsOff) this.startHands();
+      }, 5000);
+    }
     // Re-probe until the laptop answers, and again every 30 s in case the Wi-Fi changed.
     if (!this.laptopTimer) this.laptopTimer = setInterval(() => findLaptop(), 30000);
     findLaptop().then((found) => {
@@ -245,6 +251,8 @@ export default {
     this.stopRecording();
     clearInterval(this.alertTimer);
     this.alertTimer = null;
+    clearInterval(this.handsTimer);
+    this.handsTimer = null;
     clearInterval(this.laptopTimer);
     this.laptopTimer = null;
     if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
@@ -277,6 +285,8 @@ export default {
     this.stopRecording();
     clearInterval(this.alertTimer);
     this.alertTimer = null;
+    clearInterval(this.handsTimer);
+    this.handsTimer = null;
     clearInterval(this.laptopTimer);
     this.laptopTimer = null;
     if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
@@ -439,18 +449,28 @@ export default {
     if (this.alertPolling) return;
     this.alertPolling = true;
     fetch(`${hubUrl()}/alerts?since=${this.alertSince || 0}`)
-      .then((response) => (response.ok ? response.json() : null))
+      .then((response) => {
+        if (!response.ok) throw new Error(`alerts replied ${response.status}`);
+        return response.json();
+      })
       .then((body) => {
         if (!body) return;
         // The first poll only catches up, so a stale alarm from before the page opened is not shown.
         const primed = this.alertSince !== undefined;
         this.alertSince = body.next;
         const latest = body.alerts && body.alerts[body.alerts.length - 1];
+        if (latest) postEvent('status', `alert poll: ${body.alerts.length} new, primed ${primed}, kind ${latest.kind}`);
         // kind "say" is the dashboard's demo fallback: speak the line instead of bannering it
         if (primed && latest && latest.kind === 'say') this.speakSentence(latest.label, 100);
         else if (primed && latest) this.showBanner(ALERT_TEXT[latest.kind] || `! ${String(latest.kind).toUpperCase()}`);
       })
-      .catch(() => {})
+      .catch((error) => {
+        // Report a failing poll to the laptop at most every 30 s so the cause is visible remotely.
+        if (!this.pollErrorAt || Date.now() - this.pollErrorAt > 30000) {
+          this.pollErrorAt = Date.now();
+          postEvent('status', `alert poll failed: ${(error && error.message) || error}`);
+        }
+      })
       .finally(() => { this.alertPolling = false; });
   },
 
@@ -659,6 +679,10 @@ export default {
       if (active() && isNotInteractive(error)) {
         this.handsWanted = true;
         this.setData({ handStatus: 'HANDS - WAITING FOR THE GLASSES TO WAKE (TAP ONCE)' });
+        if (!this.handsWaitReported) {
+          this.handsWaitReported = true;
+          postEvent('status', `hands: camera refused as not interactive: ${(error && error.message) || error}`);
+        }
       } else if (active()) {
         const message = (error && error.message) || String(error);
         this.setData({ handStatus: `X - HANDS FAILED - ${message}` });
