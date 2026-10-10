@@ -101,6 +101,24 @@ function toLines(text) {
 }
 
 // Blob.arrayBuffer() is undocumented in this runtime; Response.arrayBuffer() is, so try both.
+// fetch() on the glasses gives up after 5 s, too short for photos and clips on slow Wi-Fi;
+// wx.request takes an explicit timeout. Resolves with the JSON reply ({} for an allowed error status).
+async function postBinary(url, body, type, timeout, allowStatus = []) {
+  const data = body instanceof ArrayBuffer ? body
+    : typeof body.arrayBuffer === 'function' ? await body.arrayBuffer() : await new Response(body).arrayBuffer();
+  return new Promise((resolve, reject) => {
+    wx.request({
+      url, method: 'POST', data, timeout, header: { 'Content-Type': type }, responseType: 'text', dataType: 'json',
+      success: (res) => {
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve(typeof res.data === 'string' ? JSON.parse(res.data) : res.data);
+        else if (allowStatus.includes(res.statusCode)) resolve({});
+        else reject(new Error(`Server replied ${res.statusCode}`));
+      },
+      fail: (err) => reject(new Error((err && err.errMsg) || 'Request failed')),
+    });
+  });
+}
+
 // Frames are a Blob (video grab) or an ArrayBuffer (photo camera fallback).
 async function blobToBase64(blob) {
   const buffer = blob instanceof ArrayBuffer ? blob
@@ -217,7 +235,13 @@ export default {
       recognition.onresult = (event) => this.showResult(event);
       recognition.onerror = (event) => {
         if (isNotInteractive(event)) return this.setData({ listening: false });
-        this.setData({ error: (event && (event.message || event.error)) || 'Speech error' });
+        const message = (event && (event.message || event.error)) || 'Speech error';
+        // "Cloud ASR can't accept audio" is a transient hiccup (mic busy or a dropped upload): let onend retry.
+        if (/accept audio|audio-capture|network|no-speech/i.test(message)) {
+          postEvent('status', `speech: ${message}`);
+          return this.setData({ listening: false });
+        }
+        this.setData({ error: message });
       };
       // The host may end a session after each utterance; keep captions running while visible.
       recognition.onend = () => {
@@ -441,13 +465,7 @@ export default {
       const clip = chunks.length === 1 || typeof Blob !== 'function' ? chunks[0] : new Blob(chunks, { type });
       const seconds = Math.round((Date.now() - started) / 1000);
       this.setData({ clipStatus: `UPLOADING ${seconds}s CLIP - ${Math.round((clip.size || 0) / 1024)} KB...` });
-      const response = await withTimeout(
-        fetch(CLIP_UPLOAD_URL, { method: 'POST', headers: { 'Content-Type': type }, body: clip }),
-        60000,
-        'Clip upload',
-      );
-      if (!response.ok) throw new Error(`Server replied ${response.status}`);
-      const { saved } = await response.json();
+      const { saved } = await postBinary(CLIP_UPLOAD_URL, clip, type, 120000);
       this.setData({ clipStatus: `OK - CLIP SAVED - ${saved}` });
     } catch (error) {
       const message = (error && error.message) || String(error);
@@ -513,14 +531,8 @@ export default {
       while (active()) {
         const jpeg = await nextFrame();
         if (!active()) break;
-        const response = await withTimeout(
-          fetch(HAND_SERVER_URL, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: jpeg }),
-          5000,
-          'Hand server',
-        );
         // 503 = the server has no hand model yet; keep streaming so the dashboard still mirrors the camera.
-        if (!response.ok && response.status !== 503) throw new Error(`Hand server replied ${response.status}`);
-        const { hands = [], gloss = null } = response.ok ? await response.json() : {};
+        const { hands = [], gloss = null } = await postBinary(HAND_SERVER_URL, jpeg, 'image/jpeg', 30000, [503]);
         if (!active()) break;
         this.drawHands(ctx, hands);
         this.onGlossFrame(gloss, jpeg);

@@ -138,10 +138,13 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if not extension or not 0 < length <= MAX_CLIP:
             return self.reply(400, {"error": "send an mp4 or webm body up to 300 MB"})
+        data = self.rfile.read(length)
+        if len(data) != length:  # the sender gave up mid-upload; don't keep a truncated clip
+            return self.reply(400, {"error": f"upload cut off at {len(data)} of {length} bytes"})
         os.makedirs(CLIPS_DIR, exist_ok=True)
         path = os.path.join(CLIPS_DIR, time.strftime("%Y%m%d-%H%M%S") + extension)
         with open(path, "wb") as file:
-            file.write(self.rfile.read(length))
+            file.write(data)
         print(f"Saved clip {path}")
         self.reply(200, {"saved": os.path.basename(path)})
 
