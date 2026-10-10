@@ -13,6 +13,10 @@ Dashboard keys `1`-`9`, `0`, `-`, `=` post the 12 lines of `DEMO_SCRIPT.md` to `
 This is the demo fallback: if sign recognition fails on stage, press the line's key.
 `GET /manifest.json`, `/sw.js`, `/icon-192.png`, `/icon-512.png` -> PWA bits so Chrome offers install ("ASL Alerts").
 All responses send `Access-Control-Allow-Origin: *`.
+Who is talking (`speaker.py`, resemblyzer 256-d voice embeddings; needs `--sounds`; self-check `python speaker.py --selftest`): on speech (YAMNet "Speech" >= 0.5, or loudness above the room's median without `--yamnet`) the last 2 s are matched to enrolled voices (cosine >= 0.75), held 4 s, and a `status` event `speaker: NAME 0.83` is logged when the name changes (at most every 4 s).
+`GET /speaker` -> `{"name":str|null,"confidence":float,"at":ms|null}` (name null + at set = unknown voice). `GET /speaker/profiles` -> `{"ALICE":3}` embedding counts.
+`POST /speaker/enroll?name=ALICE&seconds=5` -> records the next N s (1-30) of mic into `speakers/ALICE.npy`, blocks, then `{"ok":true,"samples":<embeddings in profile>}`; `POST /speaker/clear?name=ALICE` deletes it. Names `[A-Z0-9_-]{1,20}` (uppercased), else 400; enroll is 503 without `--sounds`. Enroll the wearer as `YOU`.
+Dashboard key `v`: VOICES panel (enroll with countdown, profile list with CLEAR, live `SPEAKING: NAME (83%)`). Install: `pip install torch --index-url https://download.pytorch.org/whl/cpu webrtcvad-wheels librosa` then `pip install --no-deps resemblyzer` (plain `resemblyzer` needs a C compiler for webrtcvad on Windows).
 
 ## Phone alert app
 HUD page: ARM ALERTS button (tap once: wake lock + test buzz). Each new `/alerts` alert, or event of type `alert` (e.g. glasses "SOMEONE SAID YOUR NAME"), de-duplicated by id: full-screen green/black flash at 4 Hz for 8 s, vibrates every 3 s; tap to dismiss.

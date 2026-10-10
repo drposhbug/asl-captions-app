@@ -11,3 +11,5 @@ server/events.log
 dist/
 server/signs/*
 !server/signs/.gitkeep
+server/speakers/*
+!server/speakers/.gitkeep

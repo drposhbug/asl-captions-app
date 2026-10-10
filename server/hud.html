@@ -28,8 +28,8 @@
   @keyframes flash { 0% { background: #40ff5e; color: #000; } 50% { background: #000; color: #40ff5e; } }
   #log { height: 30vh; overflow-y: auto; border-top: 1px solid #40ff5e; font-family: monospace; font-size: 0.85rem; }
   #keys { opacity: 0.4; font-size: 0.8rem; margin-top: 8px; }
-  #train input, #train button { font: inherit; background: #000; color: #40ff5e; border: 1px solid #40ff5e; padding: 6px 10px; }
-  #train pre { font-size: 0.85rem; white-space: pre-wrap; }
+  #voices input, #voices button, #train input, #train button { font: inherit; background: #000; color: #40ff5e; border: 1px solid #40ff5e; padding: 6px 10px; }
+  #voices pre, #train pre { font-size: 0.85rem; white-space: pre-wrap; }
   #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
 </head>
@@ -63,7 +63,7 @@
 <div id="captions" aria-live="polite"></div>
 <h2>Log</h2>
 <div id="log"></div>
-<div id="keys" hidden>keys 1-9 0 - = : demo lines · t : train signs</div>
+<div id="keys" hidden>keys 1-9 0 - = : demo lines · t : train signs · v : voices</div>
 <section id="train" hidden>
   <h2>Train signs</h2>
   <input id="tlabel" list="tglosses" placeholder="label" aria-label="sign label">
@@ -72,6 +72,14 @@
   <button id="ttrain">TRAIN</button>
   <pre id="tcounts" aria-live="polite"></pre>
   <pre id="tresult" aria-live="polite"></pre>
+</section>
+<section id="voices" hidden>
+  <h2>Voices</h2>
+  <div id="vnow" aria-live="polite" style="font-size:1.4rem;font-weight:bold;min-height:1.2em"></div>
+  <input id="vname" placeholder="NAME (YOU = wearer)" aria-label="voice name" maxlength="20">
+  <button id="venroll">ENROLL 5s</button>
+  <pre id="vmsg" aria-live="polite"></pre>
+  <div id="vlist" style="font-family:monospace;white-space:pre"></div>
 </section>
 <script>
 let evNext = 0, alNext = 0, primed = false, signs = [], captions = [], bannerTimer, buzzTimer, armed = false;
@@ -97,6 +105,7 @@ const DEMO = [
 document.addEventListener('keydown', ev => {
   if (ev.ctrlKey || ev.altKey || ev.metaKey || ev.target.tagName === 'INPUT') return;
   if (ev.key === '?') { $('keys').hidden = false; return; }
+  if (ev.key === 'v') { $('voices').hidden = !$('voices').hidden; if (!$('voices').hidden) { pollSpeaker(); loadVoices(); } return; }
   if (ev.key === 't') { $('train').hidden = !$('train').hidden; if (!$('train').hidden) pollRecord(); return; }
   const line = DEMO.find(d => d[0] === ev.key);
   if (line) fetch('/say', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -129,6 +138,45 @@ $('ttrain').onclick = async () => {
       Object.entries(r.per_class).map(([k, a]) => k.padEnd(14) + Math.round(a * 100) + '%').join('\n') +
       (r.confused.length ? '\n\nconfused (' + r.advice + '):\n' + r.confused.map(([a, b, n]) => a + ' <-> ' + b + ': ' + n).join('\n') : '');
   } catch (err) { $('tresult').textContent = 'train failed: hub unreachable'; }
+};
+
+// Who is talking (hub mic + speaker.py): enroll voices, show the live match.
+async function pollSpeaker() {
+  if ($('voices').hidden) return;
+  try {
+    const s = await (await fetch('/speaker')).json();
+    $('vnow').textContent = s.at == null ? '' : 'SPEAKING: ' + (s.name ? s.name + ' (' + Math.round(s.confidence * 100) + '%)' : 'unknown');
+  } catch (err) { $('vnow').textContent = 'hub unreachable'; }
+  setTimeout(pollSpeaker, 1000);
+}
+async function loadVoices() {
+  try {
+    const p = await (await fetch('/speaker/profiles')).json();
+    $('vlist').innerHTML = Object.entries(p).map(([n, c]) =>
+      '<div>' + esc(n).padEnd(22) + ' ' + c + ' <button data-clear="' + esc(n) + '">CLEAR</button></div>').join('') || 'no voices enrolled';
+  } catch (err) { $('vlist').textContent = 'hub unreachable'; }
+}
+$('vlist').onclick = async ev => {
+  const n = ev.target.dataset.clear;
+  if (!n) return;
+  await fetch('/speaker/clear?name=' + encodeURIComponent(n), { method: 'POST' }).catch(() => null);
+  loadVoices();
+};
+$('venroll').onclick = async () => {
+  const name = $('vname').value.trim().toUpperCase();
+  if (!/^[A-Z0-9_-]{1,20}$/.test(name)) { $('vmsg').textContent = 'name: A-Z 0-9 _ - (max 20)'; return $('vname').focus(); }
+  let left = 5;
+  $('venroll').disabled = true;
+  $('vmsg').textContent = 'SPEAK NOW... ' + left;
+  const tick = setInterval(() => { left = Math.max(0, left - 1); $('vmsg').textContent = left ? 'SPEAK NOW... ' + left : 'saving...'; }, 1000);
+  try {
+    const r = await fetch('/speaker/enroll?name=' + encodeURIComponent(name) + '&seconds=5', { method: 'POST' });
+    const j = await r.json();
+    $('vmsg').textContent = r.ok ? name + ' enrolled (' + j.samples + ' samples)' : 'enroll failed: ' + j.error;
+  } catch (err) { $('vmsg').textContent = 'enroll failed: hub unreachable'; }
+  clearInterval(tick);
+  $('venroll').disabled = false;
+  loadVoices();
 };
 
 function onEvent(e) {

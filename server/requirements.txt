@@ -8,3 +8,7 @@ anthropic
 tensorflow
 tensorflow-hub
 setuptools<80
+# hub.py speaker id (speaker.py). On Windows install webrtcvad-wheels first, then: pip install --no-deps resemblyzer
+webrtcvad-wheels
+librosa
+resemblyzer

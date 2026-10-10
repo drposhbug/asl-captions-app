@@ -7,6 +7,7 @@ Self-check: python hub.py --selftest
 """
 import json
 import os
+import re
 import statistics
 import struct
 import sys
@@ -28,6 +29,7 @@ HUD = os.path.join(HERE, "hud.html")
 TYPES = {"caption", "sign", "sentence", "alert", "status"}
 MAX_BODY = 64 * 1024
 HAND_URL = "http://127.0.0.1:8765"  # hand server (or forward.py in front of it)
+NAME_RE = re.compile(r"[A-Z0-9_-]{1,20}")  # enrolled voice names
 
 lock = threading.RLock()  # re-entrant: push_alert holds it around add_event
 events = deque(maxlen=500)
@@ -56,6 +58,35 @@ def push_alert(kind, label, confidence):
     with lock:
         ev = add_event({"type": "alert", "text": label, "confidence": round(confidence, 3), "label": kind, "at": now_ms()})
         alerts.append({"id": ev["id"], "kind": kind, "label": label, "confidence": ev["confidence"], "at": ev["at"]})
+
+
+# --- who is talking (speaker.py) -----------------------------------------------
+mic = deque(maxlen=40)  # (end time, ~0.975 s window): recent mic audio shared by speaker id and enrollment
+mic_on = False
+NO_SPEAKER = {"name": None, "confidence": 0.0, "at": None}
+speaker = NO_SPEAKER
+last_speaker_event = [None, 0.0]  # name, time.time()
+HOLD_S = 4.0
+
+
+def note_speaker(result):
+    global speaker
+    speaker = {"name": result["name"], "confidence": result["confidence"], "at": now_ms()}
+    name = result["name"]
+    if name and name != last_speaker_event[0] and time.time() - last_speaker_event[1] >= HOLD_S:
+        last_speaker_event[:] = [name, time.time()]
+        add_event({"type": "status", "text": "speaker: %s %.2f" % (name, result["confidence"]),
+                   "confidence": result["confidence"], "label": name, "at": now_ms()})
+
+
+def current_speaker():
+    s = speaker
+    return s if s["at"] and now_ms() - s["at"] <= HOLD_S * 1000 else NO_SPEAKER
+
+
+def voice_name(q):
+    n = q.get("name", [""])[0].strip().upper()
+    return n if NAME_RE.fullmatch(n) else None
 
 
 def png(n):
@@ -151,6 +182,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(404, {"error": "no camera frame yet"})
         if url.path == "/record":
             return self.relay("GET")
+        if url.path == "/speaker":
+            return self.send(200, current_speaker())
+        if url.path == "/speaker/profiles":
+            import speaker as voices
+            return self.send(200, voices.profiles())
         if url.path == "/flight":
             try:
                 import flight
@@ -164,6 +200,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
+        url = urlparse(self.path)
+        if url.path in ("/speaker/enroll", "/speaker/clear"):
+            import speaker as voices
+            q = parse_qs(url.query)
+            name = voice_name(q)
+            if not name:
+                return self.send(400, {"error": "name must be [A-Z0-9_-]{1,20}"})
+            if url.path == "/speaker/clear":
+                voices.clear(name)
+                return self.send(200, {"ok": True})
+            try:
+                seconds = int(q.get("seconds", ["5"])[0])
+                if not 1 <= seconds <= 30:
+                    raise ValueError
+            except ValueError:
+                return self.send(400, {"error": "seconds must be 1..30"})
+            if not mic_on:
+                return self.send(503, {"error": "mic off: run hub.py --sounds"})
+            t0 = time.time()
+            time.sleep(seconds + WINDOW / RATE + 0.2)  # let the last window land
+            waves = [w for t, w in list(mic) if t - WINDOW / RATE / 2 >= t0][: int(seconds * RATE / WINDOW) + 1]  # windows mostly after the request
+            if not waves:
+                return self.send(503, {"error": "no mic audio arrived"})
+            import numpy as np
+            try:
+                return self.send(200, {"ok": True, "samples": voices.enroll(name, np.concatenate(waves))})
+            except Exception as e:  # e.g. resemblyzer/torch missing
+                return self.send(500, {"error": str(e)[:200]})
         if urlparse(self.path).path in ("/record", "/train"):
             return self.relay("POST")
         if urlparse(self.path).path == "/test-alert":
@@ -262,8 +326,11 @@ def yamnet_classifier():
         names = [row["display_name"] for row in csv.DictReader(f)]
     idx = [(i, YAMNET_KINDS[n]) for i, n in enumerate(names) if n in YAMNET_KINDS]
 
+    speech_i = names.index("Speech")
+
     def classify(wave):
         scores = model(wave)[0].numpy().max(axis=0)  # max over YAMNet's ~0.48 s frames
+        classify.speech = float(scores[speech_i])
         best = {}
         for i, kind in idx:
             best[kind] = max(best.get(kind, 0.0), float(scores[i]))
@@ -280,6 +347,8 @@ def loudness_classifier():
         hits = []
         # shortcut: loudness spike only, no sound type; use --yamnet for real classes
         median = statistics.median(history) if len(history) >= 5 else None
+        # shortcut: "speech" = steady sound above the room's median; upgrade with --yamnet
+        classify.speech = 1.0 if median is not None and rms > max(0.01, 2 * median) else 0.0
         if median is not None and rms > 4 * median and rms > 0.01:
             hits.append(("other", "LOUD SOUND", min(1.0, rms / (8 * median))))  # 4x -> 0.5, 8x+ -> 1.0
         history.append(rms)
@@ -287,15 +356,30 @@ def loudness_classifier():
     return classify
 
 
+def identify_speaker():
+    import numpy as np
+    import speaker as voices
+    try:
+        note_speaker(voices.identify(np.concatenate([w for _, w in list(mic)[-3:]])[-2 * RATE:]))
+    except Exception as e:  # speaker id is a bonus; never stop the sound alerts
+        print("speaker id failed:", e)
+
+
 def listen(use_yamnet):
+    global mic_on
     import sounddevice as sd
     classify = yamnet_classifier() if use_yamnet else loudness_classifier()
     print("sound alerts on (%s)" % ("YAMNet" if use_yamnet else "loudness detector"))
     last = {}
     with sd.InputStream(samplerate=RATE, channels=1, dtype="float32") as stream:
         while True:
+            mic_on = True
             wave = stream.read(WINDOW)[0][:, 0]
-            for kind, label, conf in classify(wave):
+            mic.append((time.time(), wave))
+            hits = classify(wave)
+            if getattr(classify, "speech", 0) >= 0.5:
+                identify_speaker()
+            for kind, label, conf in hits:
                 t = time.time()
                 if t - last.get(kind, 0) >= DEBOUNCE_S:
                     last[kind] = t
@@ -366,6 +450,39 @@ def selftest():
     except HTTPError as e:
         assert e.code == 400 and json.loads(e.read()) == {"path": "/train"}, e
     hand.shutdown()
+    # speaker id: stub identify and enroll so the test needs no torch or mic
+    import numpy as np
+    import speaker as voices
+    voices.DIR = tempfile.mkdtemp()
+    assert json.loads(call("/speaker")) == NO_SPEAKER
+    voices.identify = lambda w: {"name": "ALICE", "confidence": 0.83}
+    mic.extend((time.time(), np.zeros(WINDOW, np.float32)) for _ in range(3))
+    identify_speaker()
+    sp = json.loads(call("/speaker"))
+    assert sp["name"] == "ALICE" and sp["confidence"] == 0.83 and sp["at"], sp
+    assert json.loads(call("/events?since=0"))["events"][-1]["text"] == "speaker: ALICE 0.83"
+    np.save(os.path.join(voices.DIR, "ALICE.npy"), np.zeros((2, 256), np.float32))
+    assert json.loads(call("/speaker/profiles")) == {"ALICE": 2}
+    for bad in ("/speaker/clear?name=bad%20name", "/speaker/clear?name=", "/speaker/enroll?name=" + "X" * 21):
+        try:
+            call(bad, {})
+            raise AssertionError("bad name accepted: " + bad)
+        except HTTPError as e:
+            assert e.code == 400, (bad, e)
+    try:
+        call("/speaker/enroll?name=bob&seconds=1", {})
+        raise AssertionError("enroll without mic accepted")
+    except HTTPError as e:
+        assert e.code == 503, e
+    global mic_on
+    mic_on = True
+    voices.enroll = lambda name, wave: (name, len(wave))
+    feeder = threading.Timer(1.5, lambda: mic.append((time.time(), np.zeros(WINDOW, np.float32))))
+    feeder.start()
+    r = json.loads(call("/speaker/enroll?name=bob&seconds=1", {}))
+    assert r == {"ok": True, "samples": ["BOB", WINDOW]}, r
+    assert json.loads(call("/speaker/clear?name=alice", {})) == {"ok": True}
+    assert json.loads(call("/speaker/profiles")) == {}
     print("selftest ok")
     server.shutdown()
 
