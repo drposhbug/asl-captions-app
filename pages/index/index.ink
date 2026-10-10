@@ -57,11 +57,13 @@ const QUICK_PHRASE_MS = 8000;
 const QUESTION_WINDOW_MS = 10000;
 const QUESTION_RE = /\?\s*$|^(do|does|did|are|is|can|could|would|will|should|have|has|was|were|what|where|when|who|why|how|any|anything)\b/i;
 const QUICK_PHRASES = [
-  "I'm deaf, please face me so I can read you.",
-  'Please write it down or type it on your phone.',
-  'I use sign language. Please speak slowly and clearly.',
-  'Can you point me to the gate?',
-  'I need help, please call someone who can sign.',
+  'Which gate is this?',
+  "I'm deaf.",
+  'Is this gate C4?',
+  'Where is gate C4?',
+  'Is this flight delayed?',
+  'When will the food arrive?',
+  "I'm lost.",
 ];
 const ALERT_TEXT = {
   fire_alarm: '! FIRE ALARM',
