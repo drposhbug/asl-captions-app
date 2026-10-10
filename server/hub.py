@@ -8,22 +8,26 @@ Self-check: python hub.py --selftest
 import json
 import os
 import statistics
+import struct
 import sys
 import threading
 import time
+import zlib
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
-PORT = 8766
+PORT = int(os.environ.get("PORT", 8766))  # App Platform sets PORT
+# Laptop hub with --forward <cloud hub url>: mic alarms are re-posted to the cloud hub the phone and glasses use.
+FORWARD_URL = sys.argv[sys.argv.index("--forward") + 1].rstrip("/") if "--forward" in sys.argv else None
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(HERE, "events.log")
 HUD = os.path.join(HERE, "hud.html")
 TYPES = {"caption", "sign", "sentence", "alert", "status"}
 MAX_BODY = 64 * 1024
 
-lock = threading.Lock()
+lock = threading.RLock()  # re-entrant: push_alert holds it around add_event
 events = deque(maxlen=500)
 alerts = deque(maxlen=500)
 # Start from the clock so ids keep rising across hub restarts and clients never wait on a stale `since`.
@@ -46,12 +50,27 @@ def add_event(ev):
 
 
 def push_alert(kind, label, confidence):
-    global last_id
-    at = now_ms()
+    # alert and its mirror event share one id so the HUD can de-duplicate them
     with lock:
-        last_id += 1
-        alerts.append({"id": last_id, "kind": kind, "label": label, "confidence": round(confidence, 3), "at": at})
-    add_event({"type": "alert", "text": label, "confidence": round(confidence, 3), "label": kind, "at": at})
+        ev = add_event({"type": "alert", "text": label, "confidence": round(confidence, 3), "label": kind, "at": now_ms()})
+        alerts.append({"id": ev["id"], "kind": kind, "label": label, "confidence": ev["confidence"], "at": ev["at"]})
+
+
+def png(n):
+    """Square PNG icon: green block on black, generated so the repo needs no binary assets."""
+    m = n // 4
+    black, green = b"\0\0\0" * n, b"\0\0\0" * m + b"\x40\xff\x5e" * (n - 2 * m) + b"\0\0\0" * m
+    raw = b"".join(b"\0" + (green if m <= y < n - m else black) for y in range(n))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", n, n, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+ICONS = {"/icon-%d.png" % n: png(n) for n in (192, 512)}
+MANIFEST = {"name": "ASL Alerts", "short_name": "ASL Alerts", "start_url": "/", "display": "standalone",
+            "background_color": "#000000", "theme_color": "#000000",
+            "icons": [{"src": p, "sizes": "%dx%d" % (n, n), "type": "image/png"} for p, n in zip(ICONS, (192, 512))]}
+SW = b"self.addEventListener('fetch', () => {});\n"  # no-op; only here so Chrome offers install
 
 
 def since(ring, query):
@@ -99,6 +118,12 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/":
             with open(HUD, "rb") as f:
                 return self.send(200, f.read(), "text/html; charset=utf-8")
+        if url.path == "/manifest.json":
+            return self.send(200, MANIFEST, "application/manifest+json")
+        if url.path == "/sw.js":
+            return self.send(200, SW, "text/javascript")
+        if url.path in ICONS:
+            return self.send(200, ICONS[url.path], "image/png")
         if url.path == "/events":
             items, nxt = since(events, q)
             return self.send(200, {"events": items, "next": nxt})
@@ -118,6 +143,31 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
+        if urlparse(self.path).path == "/test-alert":
+            push_alert("fire_alarm", "FIRE ALARM (TEST)", 1.0)
+            return self.send(200, {"ok": True})
+        if urlparse(self.path).path == "/alerts":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                if not 0 < length <= MAX_BODY:
+                    raise ValueError("body must be 1..%d bytes" % MAX_BODY)
+                a = json.loads(self.rfile.read(length))
+                push_alert(str(a["kind"])[:40], str(a["label"])[:80], float(a["confidence"]))
+            except (ValueError, KeyError, TypeError) as e:
+                return self.send(400, {"error": "alert needs kind, label, confidence: %s" % e})
+            return self.send(200, {"ok": True})
+        if urlparse(self.path).path == "/say":  # demo fallback: glasses speak `text` (kind "say" alert)
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                if not 0 < length <= MAX_BODY:
+                    raise ValueError("body must be 1..%d bytes" % MAX_BODY)
+                a = json.loads(self.rfile.read(length))
+                text, glosses = str(a["text"])[:200], str(a["glosses"])[:200]
+            except (ValueError, KeyError, TypeError) as e:
+                return self.send(400, {"error": "say needs text, glosses: %s" % e})
+            push_alert("say", text, 1.0)
+            add_event({"type": "sign", "text": glosses, "confidence": 1.0, "label": None, "at": now_ms()})  # after, so the HUD keeps it
+            return self.send(200, {"ok": True})
         if urlparse(self.path).path != "/events":
             return self.send(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length") or 0)
@@ -196,6 +246,12 @@ def listen(use_yamnet):
                     last[kind] = t
                     push_alert(kind, label, conf)
                     print("ALERT", kind, round(conf, 2))
+                    if FORWARD_URL:
+                        try:
+                            body = json.dumps({"kind": kind, "label": label, "confidence": conf}).encode()
+                            urlopen(Request(FORWARD_URL + "/alerts", data=body, headers={"Content-Type": "application/json"}), timeout=5)
+                        except Exception as e:  # the local HUD already has the alert; never stop listening
+                            print("forward failed:", e)
 
 
 def selftest():
@@ -220,13 +276,29 @@ def selftest():
     a = json.loads(call("/alerts?since=0"))
     assert a["alerts"][0]["kind"] == "fire_alarm" and a["next"] == a["alerts"][0]["id"], a
     assert b"<title>" in call("/")
+    assert json.loads(call("/manifest.json"))["display"] == "standalone"
+    assert b"addEventListener" in call("/sw.js") and call("/icon-512.png")[1:4] == b"PNG"
+    with urlopen(Request(base + "/test-alert", data=b"", method="POST")) as r:
+        assert json.loads(r.read()) == {"ok": True}
+    t = json.loads(call("/alerts?since=%d" % a["next"]))["alerts"]
+    assert [x["label"] for x in t] == ["FIRE ALARM (TEST)"] and t[0]["confidence"] == 1.0, t
+    assert json.loads(call("/events?since=0"))["events"][-1]["id"] == t[0]["id"]  # shared id for HUD de-dup
     try:
         call("/events", {"type": "nope", "text": "x"})
         raise AssertionError("bad event accepted")
     except Exception as e:
         assert getattr(e, "code", None) == 400, e
+    assert json.loads(call("/say", {"text": "Hello!", "glosses": "HELLO"})) == {"ok": True}
+    s = json.loads(call("/alerts?since=%d" % t[0]["id"]))["alerts"]
+    assert [(x["kind"], x["label"]) for x in s] == [("say", "Hello!")], s
+    assert [(e["type"], e["text"]) for e in json.loads(call("/events?since=%d" % t[0]["id"]))["events"]] == [("alert", "Hello!"), ("sign", "HELLO")]
+    try:
+        call("/say", {"text": "x"})
+        raise AssertionError("say without glosses accepted")
+    except Exception as e:
+        assert getattr(e, "code", None) == 400, e
     with open(LOG) as f:
-        assert len(f.read().splitlines()) == 2
+        assert len(f.read().splitlines()) == 5
     print("selftest ok")
     server.shutdown()
 

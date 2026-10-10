@@ -149,6 +149,8 @@ export default {
     this.pendingSentence = null;
     this.scene = '';
     this.sceneAt = 0;
+    // Head gestures are optional signals; the tap path below stays usable without them.
+    if (typeof this.enableWorldAwareness === 'function') this.enableWorldAwareness();
     this.setData({ canvasWidth: window.innerWidth, canvasHeight: window.innerHeight });
   },
 
@@ -317,7 +319,9 @@ export default {
         const primed = this.alertSince !== undefined;
         this.alertSince = body.next;
         const latest = body.alerts && body.alerts[body.alerts.length - 1];
-        if (primed && latest) this.showBanner(ALERT_TEXT[latest.kind] || `▲ ${String(latest.kind).toUpperCase()}`);
+        // kind "say" is the dashboard's demo fallback: speak the line instead of bannering it
+        if (primed && latest && latest.kind === 'say') this.speakSentence(latest.label, 100);
+        else if (primed && latest) this.showBanner(ALERT_TEXT[latest.kind] || `▲ ${String(latest.kind).toUpperCase()}`);
       })
       .catch(() => {})
       .finally(() => { this.alertPolling = false; });
@@ -338,18 +342,40 @@ export default {
 
   // Glasses have no touchscreen: temple tap (Enter) speaks the shown quick phrase or pending sentence, else
   // starts/stops a clip; ArrowUp cycles quick phrases (or retries captions while an error is shown); ArrowDown toggles hands.
-  // TODO: head nods/shakes (events.md head gesture events) for ASL yes/no grammar
+  // ASL yes/no lives in the head: a nod confirms what is on screen (or just says "Yes"), a shake rejects it (or "No").
+  onHeadGesture(event) {
+    const gesture = event && event.gesture;
+    if (gesture === 'nod') {
+      if (!this.confirmShown()) this.speakSentence('Yes.', 100);
+    } else if (gesture === 'shake') {
+      if (this.data.quickPhrase || this.pendingSentence) this.dismissShown();
+      else this.speakSentence('No.', 100);
+    }
+  },
+
+  // Speaks the quick phrase or pending sentence on screen; returns false when there is none.
+  confirmShown() {
+    if (this.data.quickPhrase) {
+      clearTimeout(this.quickTimer);
+      const phrase = this.data.quickPhrase;
+      this.setData({ quickPhrase: '' });
+      this.speakSentence(phrase, 100);
+    // A sentence the model was unsure of waits for the signer's confirmation.
+    } else if (this.pendingSentence) this.speakSentence(this.pendingSentence, this.pendingPercent);
+    else return false;
+    return true;
+  },
+
+  dismissShown() {
+    clearTimeout(this.quickTimer);
+    this.pendingSentence = null;
+    this.setData({ quickPhrase: '', sentence: '', sentencePercent: 0, sentenceStatus: 'DISMISSED' });
+  },
+
   onKeyUp(event) {
     if (event.code === 'Enter') {
       event.preventDefault();
-      if (this.data.quickPhrase) {
-        clearTimeout(this.quickTimer);
-        const phrase = this.data.quickPhrase;
-        this.setData({ quickPhrase: '' });
-        this.speakSentence(phrase, 100);
-      // A sentence the model was unsure of waits for the signer's confirmation.
-      } else if (this.pendingSentence) this.speakSentence(this.pendingSentence, this.pendingPercent);
-      else this.toggleRecording();
+      if (!this.confirmShown()) this.toggleRecording();
     } else if (event.code === 'ArrowUp') {
       event.preventDefault();
       if (this.data.error) this.retryCaptions();

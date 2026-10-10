@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ASL HUD</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<meta name="theme-color" content="#000000">
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; padding: 16px; background: #000; color: #40ff5e; font-family: sans-serif; }
@@ -15,15 +18,22 @@
   #signs { font-size: 1.4rem; letter-spacing: 0.05em; min-height: 1.2em; }
   #captions div { font-size: 1.2rem; margin: 4px 0; }
   .who { opacity: 0.7; }
-  #banner { position: fixed; inset: 0 0 auto 0; padding: 24px 16px; font-size: 2rem; font-weight: bold; text-align: center;
-            animation: flash 0.5s steps(1) infinite; z-index: 1; }
-  @keyframes flash { 0% { background: #f00; color: #fff; } 50% { background: #40ff5e; color: #000; } }
+  #arm { width: 100%; padding: 24px; font-size: 1.6rem; font-weight: bold; background: #40ff5e; color: #000; border: 0; }
+  #arm.on { background: #000; color: #40ff5e; border: 2px solid #40ff5e; }
+  #banner { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+            font-size: clamp(3rem, 15vw, 8rem); font-weight: bold; text-align: center; overflow-wrap: anywhere;
+            animation: flash 0.25s steps(1) infinite; z-index: 1; cursor: pointer; }
+  #banner[hidden] { display: none; }
+  /* 4 Hz: one full green/black cycle every 0.25 s */
+  @keyframes flash { 0% { background: #40ff5e; color: #000; } 50% { background: #000; color: #40ff5e; } }
   #log { height: 30vh; overflow-y: auto; border-top: 1px solid #40ff5e; font-family: monospace; font-size: 0.85rem; }
+  #keys { opacity: 0.4; font-size: 0.8rem; margin-top: 8px; }
   #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
 </head>
 <body>
 <div id="banner" role="alert" hidden></div>
+<button id="arm">ARM ALERTS</button>
 <h2>Sentence</h2>
 <div id="sentence" aria-live="polite"></div>
 <div class="bar"><div class="track"><div class="fill" id="conf"></div></div><span id="pct"></span></div>
@@ -33,12 +43,39 @@
 <div id="captions" aria-live="polite"></div>
 <h2>Log</h2>
 <div id="log"></div>
+<div id="keys" hidden>keys 1-9 0 - = : demo lines</div>
 <script>
-let evNext = 0, alNext = 0, signs = [], captions = [], bannerTimer;
+let evNext = 0, alNext = 0, primed = false, signs = [], captions = [], bannerTimer, buzzTimer, armed = false;
+const seen = new Set();  // alert ids; hub alerts and their mirror events share an id
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+// Demo fallback: keep identical to DEMO_SCRIPT.md. [key, glosses, sentence]
+const DEMO = [
+  ['1', 'HELLO', 'Hello!'],
+  ['2', 'ME DEAF', "I'm Deaf. Please face me so I can read your captions."],
+  ['3', 'MY FLIGHT GATE WHERE', 'Which gate does my flight leave from?'],
+  ['4', 'HERE MY ID BOARDING-PASS', 'Here is my ID and boarding pass.'],
+  ['5', 'BAG CHECK NEED', 'Do I need to check this bag?'],
+  ['6', 'YES', 'Yes.'],
+  ['7', 'NO', 'No.'],
+  ['8', 'PLEASE WRITE DOWN', 'Please write it down for me.'],
+  ['9', 'BATHROOM WHERE', 'Where is the bathroom?'],
+  ['0', 'HELP PLEASE', 'Can you help me, please?'],
+  ['-', 'THANK-YOU', 'Thank you.'],
+  ['=', 'EMERGENCY HELP CALL PERSON SIGN', 'I need help. Please call someone who can sign.'],
+];
+document.addEventListener('keydown', ev => {
+  if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+  if (ev.key === '?') { $('keys').hidden = false; return; }
+  const line = DEMO.find(d => d[0] === ev.key);
+  if (line) fetch('/say', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ glosses: line[1], text: line[2] }) }).catch(err => console.warn('say failed', err));
+});
+
 function onEvent(e) {
+  // a "say" alert (demo key) is a spoken sentence, not an alarm; its sign event follows it
+  if (e.type === 'alert' && e.label === 'say') e = { ...e, type: 'sentence' };
   if (e.type === 'sentence') {
     $('sentence').textContent = e.text;
     const pct = e.confidence == null ? '' : Math.round(e.confidence * 100) + '%';
@@ -63,24 +100,55 @@ function render() {
     (c.confidence != null && c.confidence < 0.6 ? ' ?' : '') + '</div>').join('');
 }
 
-function onAlert(a) {
-  $('banner').textContent = '⚠ ' + a.label;
+const buzz = () => navigator.vibrate && navigator.vibrate([500, 200, 500, 200, 500, 200, 500]);
+
+function dismiss() {
+  $('banner').hidden = true;
+  clearTimeout(bannerTimer);
+  clearInterval(buzzTimer);
+  if (navigator.vibrate) navigator.vibrate(0);
+}
+
+function onAlert(id, label) {
+  if (seen.has(id)) return;
+  seen.add(id);
+  if (!primed) return;  // first poll only catches up; don't replay old alerts
+  $('banner').textContent = '⚠ ' + label;
   $('banner').hidden = false;
   clearTimeout(bannerTimer);
-  bannerTimer = setTimeout(() => { $('banner').hidden = true; }, 5000);
-  if (navigator.vibrate) navigator.vibrate([300, 100, 300]);
+  clearInterval(buzzTimer);
+  buzz();
+  buzzTimer = setInterval(buzz, 3000);
+  bannerTimer = setTimeout(dismiss, 8000);
 }
+$('banner').onclick = dismiss;
+
+async function keepAwake() {
+  try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); }
+  catch (err) { console.warn('wake lock failed', err); }
+}
+$('arm').onclick = () => {  // vibrate and wake lock need a user gesture
+  armed = true;
+  keepAwake();
+  if (navigator.vibrate) navigator.vibrate(200);
+  $('arm').textContent = 'ARMED · screen stays on';
+  $('arm').className = 'on';
+};
+// the browser drops the wake lock whenever the page is hidden
+document.addEventListener('visibilitychange', () => { if (armed && document.visibilityState === 'visible') keepAwake(); });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(err => console.warn('sw', err));
 
 async function poll() {
   try {
     const ev = await (await fetch('/events?since=' + evNext)).json();
     ev.events.forEach(onEvent);
+    ev.events.filter(e => e.type === 'alert' && e.label !== 'say').forEach(e => onAlert(e.id, e.text));
     evNext = ev.next;
     render();
     const al = await (await fetch('/alerts?since=' + alNext)).json();
-    // first poll only catches up; don't replay old alerts
-    if (alNext) al.alerts.forEach(onAlert);
-    alNext = al.next || -1;
+    al.alerts.filter(a => a.kind !== 'say').forEach(a => onAlert(a.id, a.label));
+    alNext = al.next;
+    primed = true;
   } catch (err) { console.warn('poll failed', err); }
   setTimeout(poll, 1000);
 }

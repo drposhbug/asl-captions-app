@@ -1,0 +1,15 @@
+name: asl-hub
+region: nyc
+services:
+  - name: hub
+    github:
+      repo: drposhbug/asl-captions-app
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: server/Dockerfile
+    source_dir: /
+    http_port: 8080
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    instance_count: 1
+    health_check:
+      http_path: /events?since=0
