@@ -28,6 +28,8 @@
   @keyframes flash { 0% { background: #40ff5e; color: #000; } 50% { background: #000; color: #40ff5e; } }
   #log { height: 30vh; overflow-y: auto; border-top: 1px solid #40ff5e; font-family: monospace; font-size: 0.85rem; }
   #keys { opacity: 0.4; font-size: 0.8rem; margin-top: 8px; }
+  #train input, #train button { font: inherit; background: #000; color: #40ff5e; border: 1px solid #40ff5e; padding: 6px 10px; }
+  #train pre { font-size: 0.85rem; white-space: pre-wrap; }
   #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
 </head>
@@ -54,7 +56,16 @@
 <div id="captions" aria-live="polite"></div>
 <h2>Log</h2>
 <div id="log"></div>
-<div id="keys" hidden>keys 1-9 0 - = : demo lines</div>
+<div id="keys" hidden>keys 1-9 0 - = : demo lines · t : train signs</div>
+<section id="train" hidden>
+  <h2>Train signs</h2>
+  <input id="tlabel" list="tglosses" placeholder="label" aria-label="sign label">
+  <datalist id="tglosses"></datalist>
+  <button id="trec">RECORD 3s</button>
+  <button id="ttrain">TRAIN</button>
+  <pre id="tcounts" aria-live="polite"></pre>
+  <pre id="tresult" aria-live="polite"></pre>
+</section>
 <script>
 let evNext = 0, alNext = 0, primed = false, signs = [], captions = [], bannerTimer, buzzTimer, armed = false;
 const seen = new Set();  // alert ids; hub alerts and their mirror events share an id
@@ -77,12 +88,41 @@ const DEMO = [
   ['=', 'EMERGENCY HELP CALL PERSON SIGN', 'I need help. Please call someone who can sign.'],
 ];
 document.addEventListener('keydown', ev => {
-  if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+  if (ev.ctrlKey || ev.altKey || ev.metaKey || ev.target.tagName === 'INPUT') return;
   if (ev.key === '?') { $('keys').hidden = false; return; }
+  if (ev.key === 't') { $('train').hidden = !$('train').hidden; if (!$('train').hidden) pollRecord(); return; }
   const line = DEMO.find(d => d[0] === ev.key);
   if (line) fetch('/say', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ glosses: line[1], text: line[2] }) }).catch(err => console.warn('say failed', err));
 });
+
+// Sign training: record labelled landmark samples on the hand server, then retrain (signs.py).
+$('tglosses').innerHTML = [...new Set(DEMO.map(d => d[1].split(' ')[0])), 'NOTHING'].map(g => '<option value="' + g + '">').join('');
+async function pollRecord() {
+  if ($('train').hidden) return;
+  try {
+    const r = await (await fetch('/record')).json();
+    $('tcounts').textContent = (r.recording ? 'RECORDING ' + r.recording + '\n' : '') +
+      Object.entries(r.counts).map(([k, n]) => k.padEnd(14) + n).join('\n');
+  } catch (err) { $('tcounts').textContent = 'hand server unreachable'; }
+  setTimeout(pollRecord, 1000);
+}
+$('trec').onclick = async () => {
+  const label = $('tlabel').value.trim().toUpperCase();
+  if (!label) return $('tlabel').focus();
+  const r = await fetch('/record?label=' + encodeURIComponent(label) + '&seconds=3', { method: 'POST' }).catch(() => null);
+  if (!r || !r.ok) $('tresult').textContent = 'record failed: ' + (r ? (await r.json()).error : 'hub unreachable');
+};
+$('ttrain').onclick = async () => {
+  $('tresult').textContent = 'training...';
+  try {
+    const r = await (await fetch('/train', { method: 'POST' })).json();
+    $('tresult').textContent = r.error ? 'train failed: ' + r.error :
+      r.classifier + ' on ' + r.samples + ' samples, held-out accuracy ' + Math.round(r.accuracy * 100) + '%\n' +
+      Object.entries(r.per_class).map(([k, a]) => k.padEnd(14) + Math.round(a * 100) + '%').join('\n') +
+      (r.confused.length ? '\n\nconfused (' + r.advice + '):\n' + r.confused.map(([a, b, n]) => a + ' <-> ' + b + ': ' + n).join('\n') : '');
+  } catch (err) { $('tresult').textContent = 'train failed: hub unreachable'; }
+};
 
 function onEvent(e) {
   // a "say" alert (demo key) is a spoken sentence, not an alarm; its sign event follows it

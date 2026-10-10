@@ -28,3 +28,10 @@ Hearing side (TSA agent, speaks aloud so captions show): "Next! ID and boarding 
 6. Go: sign; if a sign misses, press its key
 
 Cut list: if short on time drop 5, 8 and 9; never drop 1, 2 and =.
+
+## Training the signs
+Signs come from a local landmark classifier (`server/signs.py`) once `server/signs/model.pkl` exists; until then the server falls back to Roboflow.
+1. Hub and hand server running, glasses streaming hands. On the dashboard press `t` to open TRAIN SIGNS.
+2. Pick a label (first gloss of each line, plus `NOTHING`), hold the sign in view and press RECORD 3s. Repeat for 30-50 reps per sign, varying angle and distance. Record `NOTHING` too: resting hands, scratching, pointing at things.
+3. Press TRAIN (or `python server/signs.py train`). The dashboard shows held-out accuracy per sign and the most confused pairs.
+4. For each confused pair: record more reps of both, or swap one for a more distinct sign in the script above. Retrain; the server picks up the new model on the next frame.

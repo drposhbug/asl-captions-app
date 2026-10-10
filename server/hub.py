@@ -16,6 +16,7 @@ import zlib
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 PORT = int(os.environ.get("PORT", 8766))  # App Platform sets PORT
@@ -26,6 +27,7 @@ LOG = os.path.join(HERE, "events.log")
 HUD = os.path.join(HERE, "hud.html")
 TYPES = {"caption", "sign", "sentence", "alert", "status"}
 MAX_BODY = 64 * 1024
+HAND_URL = "http://127.0.0.1:8765"  # hand server (or forward.py in front of it)
 
 lock = threading.RLock()  # re-entrant: push_alert holds it around add_event
 events = deque(maxlen=500)
@@ -109,6 +111,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def relay(self, method):
+        """Sign recording/training lives on the hand server; relay so the dashboard needs one origin."""
+        try:
+            with urlopen(Request(HAND_URL + self.path, data=b"" if method == "POST" else None, method=method), timeout=60) as r:
+                return self.send(200, r.read())
+        except HTTPError as e:
+            return self.send(e.code, e.read())
+        except Exception as e:
+            return self.send(502, {"error": "hand server unreachable: %s" % e})
+
     def do_OPTIONS(self):
         self.send(204, b"", "text/plain")
 
@@ -133,10 +145,12 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/preview.jpg":
             # Relay the hand server's camera preview so one origin (and the tunnel) serves the whole dashboard.
             try:
-                with urlopen("http://127.0.0.1:8765/preview.jpg", timeout=2) as r:
+                with urlopen(HAND_URL + "/preview.jpg", timeout=2) as r:
                     return self.send(200, r.read(), "image/jpeg")
             except Exception:
                 return self.send(404, {"error": "no camera frame yet"})
+        if url.path == "/record":
+            return self.relay("GET")
         if url.path == "/flight":
             try:
                 import flight
@@ -150,6 +164,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
+        if urlparse(self.path).path in ("/record", "/train"):
+            return self.relay("POST")
         if urlparse(self.path).path == "/test-alert":
             push_alert("fire_alarm", "FIRE ALARM (TEST)", 1.0)
             return self.send(200, {"ok": True})
@@ -306,6 +322,18 @@ def selftest():
         assert getattr(e, "code", None) == 400, e
     with open(LOG) as f:
         assert len(f.read().splitlines()) == 5
+    global HAND_URL
+    hand = ThreadingHTTPServer(("127.0.0.1", 0), type("Stub", (Handler,), {  # fake hand server echoing the path
+        "do_GET": lambda h: h.send(200, {"path": h.path}), "do_POST": lambda h: h.send(400, {"path": h.path})}))
+    threading.Thread(target=hand.serve_forever, daemon=True).start()
+    HAND_URL = "http://127.0.0.1:%d" % hand.server_address[1]
+    assert json.loads(call("/record?x=1")) == {"path": "/record?x=1"}
+    try:
+        call("/train", {})
+        raise AssertionError("relay hid the hand server's error")
+    except HTTPError as e:
+        assert e.code == 400 and json.loads(e.read()) == {"path": "/train"}, e
+    hand.shutdown()
     print("selftest ok")
     server.shutdown()
 

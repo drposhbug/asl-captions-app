@@ -9,3 +9,5 @@ server/clips/
 __pycache__/
 server/events.log
 dist/
+server/signs/*
+!server/signs/.gitkeep

@@ -8,19 +8,26 @@ under server/frames/<session>/ for uploading to Roboflow and training a sign mod
 
 Clips recorded on the glasses are POSTed to /clips and saved under server/clips/ for HaWoR (run_hawor.py).
 
+Signs: a local landmark classifier (signs.py) once signs/model.pkl exists, else Roboflow (gloss.py).
+POST /record?label=HELLO&seconds=3 saves the next 3 s of hands as samples, GET /record shows counts,
+POST /train retrains signs/model.pkl.
+
 Run:       python hands_server.py [--save-frames]
 Self-check: python hands_server.py --selftest
 """
 import json
 import os
+import re
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlparse
 
 import cv2
 import numpy as np
 
 import gloss
+import signs
 
 # torch + WiLoR are a multi-GB install; without them the server still takes clip uploads.
 try:
@@ -76,8 +83,25 @@ def detect(pipeline, bgr):
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if self.path == "/clips":
+        url = urlparse(self.path)
+        if url.path == "/clips":
             return self.save_clip()
+        if url.path == "/record":
+            q = parse_qs(url.query)
+            label = q.get("label", [""])[0].strip().upper()
+            try:
+                seconds = float(q.get("seconds", ["3"])[0])
+            except ValueError:
+                seconds = 0
+            if not re.fullmatch(r"[A-Z0-9_-]{1,32}", label) or not 0 < seconds <= 30:
+                return self.reply(400, {"error": "need label=[A-Z0-9_-]{1,32} and seconds in (0, 30]"})
+            self.server.recording = (label, time.time() + seconds)
+            return self.reply(200, {"ok": True})
+        if url.path == "/train":
+            try:
+                return self.reply(200, signs.train())
+            except ValueError as error:
+                return self.reply(400, {"error": str(error)})
         if self.path != "/hands":
             return self.reply(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length") or 0)
@@ -93,8 +117,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(503, {"error": "hand model not installed on the server"})
         hands = detect(self.server.pipeline, bgr)
         self.server.last = (bgr, hands)
-        # Sign classification runs on the clean frame only when a hand is in view.
-        sign = gloss.predict(body) if hands else None
+        label, until = self.server.recording
+        if hands and label and time.time() < until:
+            signs.add_sample(label, hands)
+        # Local landmark model once trained; else Roboflow on the clean frame, only when a hand is in view.
+        if signs.ready():
+            sign = signs.predict(hands)
+        else:
+            sign = gloss.predict(body) if hands else None
         if hands and self.server.session_dir:
             # Save the original bytes: the clean frame, exactly as the glasses camera saw it.
             name = f"{time.time():.3f}.jpg"
@@ -116,6 +146,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # The last glasses frame with the skeleton drawn on it, for the dashboard (and overlay calibration).
     def do_GET(self):
+        if self.path.split("?")[0] == "/record":
+            label, until = self.server.recording
+            return self.reply(200, {"recording": label if time.time() < until else None, "counts": signs.counts()})
         if self.path.split("?")[0] != "/preview.jpg" or self.server.last is None:
             return self.reply(404, {"error": "no frame yet"})
         bgr, hands = self.server.last
@@ -168,6 +201,7 @@ if __name__ == "__main__":
         server = HTTPServer(("0.0.0.0", PORT), Handler)
         server.pipeline = load_pipeline()
         server.last = None
+        server.recording = (None, 0)  # (label, until epoch s) for POST /record
         server.session_dir = None
         if "--save-frames" in sys.argv:
             server.session_dir = os.path.join(FRAMES_DIR, time.strftime("%Y%m%d-%H%M%S"))

@@ -7,6 +7,7 @@ An accessibility agent for Deaf and hard-of-hearing users on Rokid Glasses.
 - Shows live speech-to-text captions of nearby speech in large, high-contrast text.
 - Turns recognised signs (glosses from the server's Roboflow classifier) into spoken English: the host language model fills in grammar using the captions and a camera scene description (`pages/index/signing.js`); sentences it is 90% sure of are spoken aloud, others wait for a tap.
 - Tracks hands with WiLoR (on a companion laptop GPU server, `server/hands_server.py`) and draws the hand skeleton over the real world; swipe down to toggle. The server can save clean frames for training a sign model in Roboflow.
+- Classifies signs locally from WiLoR landmarks (`server/signs.py`, sklearn MLP); record samples and retrain from the dashboard (key `t`). Roboflow is only the fallback before a model exists.
 - Tap records a clean clip and uploads it to the laptop for HaWoR (`server/run_hawor.py`) and Roboflow training frames.
 - Shows a confidence bar under each filled sentence.
 - Logs captions, signs, sentences and alerts to the laptop hub (`server/hub.py`, port 8766); failures never block the glasses.
