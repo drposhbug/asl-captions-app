@@ -47,8 +47,6 @@ const ALERT_TEXT = {
   car_horn: '! CAR HORN',
   door_knock: '! DOOR KNOCK',
 };
-// Below this recognition confidence (e.g. a muffled PA announcement) the caption is marked "?".
-const LOW_CAPTION_CONFIDENCE = 0.6;
 const LABEL_PROMPT = 'Given what the wearer sees and what was just said, answer with ONE label in caps for who is speaking: e.g. TSA AGENT, GATE AGENT, ANNOUNCEMENT, PILOT, CASHIER, DOCTOR, FRIEND, PERSON. Only the label.';
 const HAND_CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],
@@ -138,7 +136,7 @@ function postEvent(type, text, confidence = null, label = null) {
 // The runtime reports "view not active" as InvalidStateError, sometimes only inside the message text.
 function isNotInteractive(error) {
   const text = error ? `${error.name} ${error.error} ${error.message}` : '';
-  return /InvalidStateError|blurred/i.test(text);
+  return /InvalidStateError|blurred|non-?interactive|not interactive/i.test(text);
 }
 
 export default {
@@ -199,6 +197,8 @@ export default {
   onHostFocus() {
     this.hostFocused = true;
     if (this.visible && !this.data.listening) this.startCaptions();
+    // The camera refuses to open while the view is not interactive; resume hand tracking once it is.
+    if (this.visible && this.handsWanted && !this.handRun) this.startHands();
   },
 
   onHostBlur() {
@@ -295,9 +295,8 @@ export default {
 
   renderCaptions() {
     const text = Array.from(this.segments, ([key, said]) => {
-      const { confidence, label } = this.marks.get(key) || {};
-      const unsure = typeof confidence === 'number' && confidence < LOW_CAPTION_CONFIDENCE;
-      return `${unsure ? '?' : ''}${label ? `${label}: ` : ''}${said}`;
+      const { label } = this.marks.get(key) || {};
+      return `${label ? `${label}: ` : ''}${said}`;
     }).join(' ');
     this.setData({ lines: toLines(text) });
   },
@@ -469,7 +468,9 @@ export default {
       this.setData({ clipStatus: `OK - CLIP SAVED - ${saved}` });
     } catch (error) {
       const message = (error && error.message) || String(error);
-      this.setData({ clipStatus: `X - CLIP FAILED - ${message}` });
+      this.setData({ clipStatus: isNotInteractive(error)
+        ? 'CLIP - GLASSES NOT AWAKE, TAP AGAIN IN A SECOND'
+        : `X - CLIP FAILED - ${message}` });
       postEvent('status', `clip failed: ${message}`);
     } finally {
       clearTimeout(limit);
@@ -481,8 +482,11 @@ export default {
 
   toggleHands() {
     if (this.recording) return; // the camera is busy with a clip
-    if (this.handRun) this.stopHands();
-    else this.startHands();
+    if (this.handRun || this.handsWanted) {
+      this.handsWanted = false;
+      this.stopHands();
+      this.setData({ handStatus: '' });
+    } else this.startHands();
   },
 
   // Streams camera frames to the WiLoR hand server and draws the returned hand skeletons.
@@ -491,6 +495,7 @@ export default {
     if (this.handRun) return;
     // A token per run: a stopped loop still awaiting a frame must not touch a newer run.
     const run = (this.handRun = {});
+    this.handsWanted = false;
     const active = () => this.handRun === run;
     this.setData({ handStatus: 'HANDS - STARTING CAMERA...' });
     const ctx = wx.createCanvasContext('hands');
@@ -543,7 +548,10 @@ export default {
       }
     } catch (error) {
       // Stopping releases the camera mid-frame; that failure is expected, not worth showing.
-      if (active()) {
+      if (active() && isNotInteractive(error)) {
+        this.handsWanted = true;
+        this.setData({ handStatus: 'HANDS - WAITING FOR THE GLASSES TO WAKE (TAP ONCE)' });
+      } else if (active()) {
         const message = (error && error.message) || String(error);
         this.setData({ handStatus: `X - HANDS FAILED - ${message}` });
         postEvent('status', `hands failed: ${message}`);
