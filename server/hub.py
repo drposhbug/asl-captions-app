@@ -117,6 +117,9 @@ def since(ring, query):
     except ValueError:
         n = 0
     with lock:
+        # A client ahead of us (it saw a hub with higher ids) would skip every new alert; catch it up to now.
+        if n > last_id:
+            return [], last_id
         items = [e for e in ring if e["id"] > n]
     return items, (items[-1]["id"] if items else n)
 

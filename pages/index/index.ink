@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b5-airport-tts';
+const BUILD = 'b6-jarvis';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -50,6 +50,8 @@ const OVERLAY_ZOOM = 1;
 // shortcut: hardcoded wearer name; read it from settings once the agent has a settings page.
 const USER_NAME = 'Oscar';
 const NAME_PATTERN = new RegExp(`\\b${USER_NAME}\\b`, 'i');
+// Saying "Jarvis" wakes the app like "Hi Rokid" (that system wake word can't be renamed); ASR often hears "Jervis".
+const WAKE_PATTERN = /\bj[ae]rvis\b/i;
 const BANNER_MS = 6000;
 // A quick phrase stays armed for the next tap this long after the last swipe.
 const QUICK_PHRASE_MS = 8000;
@@ -276,7 +278,18 @@ export default {
   // Wakeup ("Hi Rokid" or touch) belongs to captions here, not the system assistant.
   onVoiceWakeup(event) {
     event.preventDefault();
+    this.wake();
+  },
+
+  // "Hi Rokid", touch wakeup or "Jarvis": captions and sign tracking on, ready for the signer.
+  wake() {
     if (!this.data.listening) this.startCaptions();
+    if (!this.handRun && !this.recording) {
+      this.handsOff = false;
+      this.startHands();
+    }
+    this.setData({ sentenceStatus: 'JARVIS - READY, SIGN NOW' });
+    postEvent('status', 'wake: jarvis');
   },
 
   // SpeechRecognition.start() throws while the view is blurred; begin once it gains host focus.
@@ -432,6 +445,7 @@ export default {
     const said = this.segments.get(key);
     if (!said) return;
     const mark = this.marks.get(key) || {};
+    if (WAKE_PATTERN.test(said)) this.wake();
     if (NAME_PATTERN.test(said)) {
       this.showBanner('! SOMEONE SAID YOUR NAME');
       postEvent('alert', 'SOMEONE SAID YOUR NAME', mark.confidence, 'name');
@@ -467,17 +481,19 @@ export default {
     return reply.trim().split('\n')[0].toUpperCase().slice(0, 20) || null;
   },
 
-  // One request in flight; a failed poll just waits for the next tick.
+  // One request in flight; a failed poll just waits for the next tick. A request that hangs (hub restarted
+  // mid-request) is abandoned after 5 s, else alerts would stop for good.
   pollAlerts() {
-    if (this.alertPolling) return;
-    this.alertPolling = true;
+    if (this.alertPolling && Date.now() - this.alertPolling < 5000) return;
+    const started = Date.now();
+    this.alertPolling = started;
     fetch(`${hubUrl()}/alerts?since=${this.alertSince || 0}`)
       .then((response) => {
         if (!response.ok) throw new Error(`alerts replied ${response.status}`);
         return response.json();
       })
       .then((body) => {
-        if (!body) return;
+        if (!body || this.alertPolling !== started) return;
         // The first poll only catches up, so a stale alarm from before the page opened is not shown.
         const primed = this.alertSince !== undefined;
         this.alertSince = body.next;
@@ -499,7 +515,7 @@ export default {
           postEvent('status', `alert poll failed: ${(error && error.message) || error}`);
         }
       })
-      .finally(() => { this.alertPolling = false; });
+      .finally(() => { if (this.alertPolling === started) this.alertPolling = 0; });
   },
 
   // An alarm takes over the whole display and flashes; a Deaf wearer must not be able to miss it.

@@ -19,4 +19,5 @@ An accessibility agent for Deaf and hard-of-hearing users on Rokid Glasses.
 - Falls back to a dictionary sentence (`pages/index/dictionary.js`) when the language model is offline; the signer taps to speak it.
 - Demo fallback: number keys on the hub dashboard (`DEMO_SCRIPT.md`) post `/say`; the glasses speak the line from the alert poll.
 - Swipe up cycles quick phrases ("I'm deaf, please face me…"); tap speaks the shown phrase.
+- Saying "Jarvis" wakes the app like "Hi Rokid" (captions and sign tracking on); the system wake word itself cannot be renamed.
 - Head nod confirms the sentence or quick phrase on screen (or says "Yes"); head shake dismisses it (or says "No").
