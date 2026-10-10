@@ -10,3 +10,5 @@ store-media
 server
 pages/index/signing.test.mjs
 pages/index/dictionary.test.mjs
+.do
+DEMO_SCRIPT.md
