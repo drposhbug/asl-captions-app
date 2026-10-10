@@ -37,6 +37,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FRAMES_DIR = os.path.join(HERE, "frames")
 CLIPS_DIR = os.path.join(HERE, "clips")
 CLIP_TYPES = {"video/mp4": ".mp4", "video/webm": ".webm"}
+# Same 21-point skeleton the glasses draw (pages/index/index.ink).
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), (5, 9), (9, 10), (10, 11), (11, 12),
+    (9, 13), (13, 14), (14, 15), (15, 16), (13, 17), (17, 18), (18, 19), (19, 20), (0, 17),
+]
 
 
 def load_pipeline():
@@ -84,8 +89,10 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as error:
             return self.reply(400, {"error": str(error)})
         if self.server.pipeline is None:
+            self.server.last = (bgr, [])  # the dashboard preview still shows the raw glasses feed
             return self.reply(503, {"error": "hand model not installed on the server"})
         hands = detect(self.server.pipeline, bgr)
+        self.server.last = (bgr, hands)
         # Sign classification runs on the clean frame only when a hand is in view.
         sign = gloss.predict(body) if hands else None
         if hands and self.server.session_dir:
@@ -106,6 +113,28 @@ class Handler(BaseHTTPRequestHandler):
             file.write(self.rfile.read(length))
         print(f"Saved clip {path}")
         self.reply(200, {"saved": os.path.basename(path)})
+
+    # The last glasses frame with the skeleton drawn on it, for the dashboard (and overlay calibration).
+    def do_GET(self):
+        if self.path.split("?")[0] != "/preview.jpg" or self.server.last is None:
+            return self.reply(404, {"error": "no frame yet"})
+        bgr, hands = self.server.last
+        frame = bgr.copy()
+        height, width = frame.shape[:2]
+        for hand in hands:
+            points = [(int(x * width), int(y * height)) for x, y in hand["points"]]
+            for a, b in HAND_CONNECTIONS:
+                cv2.line(frame, points[a], points[b], (94, 255, 64), 2)
+            for point in points:
+                cv2.circle(frame, point, 3, (94, 255, 64), -1)
+        _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(jpeg)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(jpeg.tobytes())
 
     def reply(self, status, payload):
         body = json.dumps(payload).encode()
@@ -138,6 +167,7 @@ if __name__ == "__main__":
         # Single-threaded on purpose: one GPU model, one frame at a time.
         server = HTTPServer(("0.0.0.0", PORT), Handler)
         server.pipeline = load_pipeline()
+        server.last = None
         server.session_dir = None
         if "--save-frames" in sys.argv:
             server.session_dir = os.path.join(FRAMES_DIR, time.strftime("%Y%m%d-%H%M%S"))
