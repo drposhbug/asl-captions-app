@@ -200,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
             if not tts.available():
                 return self.send(503, {"error": "set ELEVENLABS_API_KEY"})
             try:
-                return self.send(200, tts.speak(text), "audio/mpeg")
+                return self.send(200, tts.speak(text), "audio/L16; rate=16000")
             except Exception as e:  # any API failure: the glasses fall back to their built-in voice
                 print("tts failed:", e)
                 return self.send(502, {"error": str(e)[:200]})

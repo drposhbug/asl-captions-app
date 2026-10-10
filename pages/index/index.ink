@@ -812,8 +812,13 @@ export default {
       if (!response.ok) throw new Error(`tts replied ${response.status}`);
       this.audioContext = this.audioContext || new AudioContext();
       await this.audioContext.resume();
+      // Raw 16 kHz 16-bit PCM straight into a buffer: no codec needed on the glasses.
+      const pcm = new Int16Array(await response.arrayBuffer());
+      if (!pcm.length) throw new Error('tts returned no audio');
+      const buffer = this.audioContext.createBuffer(1, pcm.length, 16000);
+      buffer.copyToChannel(Float32Array.from(pcm, (s) => s / 32768), 0);
       const source = this.audioContext.createBufferSource();
-      source.buffer = await this.audioContext.decodeAudioData(await response.arrayBuffer());
+      source.buffer = buffer;
       source.connect(this.audioContext.destination);
       source.start();
     } catch (error) {
