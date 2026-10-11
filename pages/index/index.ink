@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b15-alarm-steady';
+const BUILD = 'b16-quiet-captions';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -916,6 +916,11 @@ export default {
       source.connect(this.audioContext.destination);
       source.start();
       this.voiceSource = source;
+      // The glasses' own mic hears the voice and captions it: keep captions off until the line has played.
+      const playingMs = Math.round((pcm.length / 16000) * 1000) + 300;
+      this.stopCaptions();
+      if (this.captionResume) clearTimeout(this.captionResume);
+      this.captionResume = setTimeout(() => { if (this.visible && !this.uploading) this.startCaptions(); }, playingMs);
       // Which voice played, so a tap test on the glasses shows whether ElevenLabs is working.
       this.setData({ sentenceStatus: `SPOKEN - ELEVENLABS (${(pcm.length / 16000).toFixed(1)} s)` });
       postEvent('status', `elevenlabs ok: ${(pcm.length / 16000).toFixed(1)} s`);

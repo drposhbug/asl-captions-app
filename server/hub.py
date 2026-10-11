@@ -1,6 +1,6 @@
 """Event hub for the glasses: captions/signs/sentences/alerts in, HUD mirror page and sound alerts out.
 
-Run:        python hub.py [--sounds] [--yamnet] [--stereo] [--mic <name substring>] [--gain <float>]
+Run:        python hub.py [--sounds] [--yamnet] [--stereo] [--mic <name substring>] [--gain <float>] [--speak-laptop]
             --sounds  listen on the laptop mic and push sound alerts (loudness detector by default)
             --yamnet  with --sounds, classify sounds with YAMNet (needs tensorflow, tensorflow_hub)
             --mic ace use the input device whose name contains "ace" (case-insensitive) instead of the default
@@ -27,6 +27,7 @@ PORT = int(os.environ.get("PORT", 8766))  # App Platform sets PORT
 # Laptop hub with --forward <cloud hub url>: mic alarms are re-posted to the cloud hub the phone and glasses use.
 FORWARD_URL = sys.argv[sys.argv.index("--forward") + 1].rstrip("/") if "--forward" in sys.argv else None
 GAIN = float(sys.argv[sys.argv.index("--gain") + 1]) if "--gain" in sys.argv else 1.0  # mic sample multiplier
+SPEAK_LAPTOP = "--speak-laptop" in sys.argv  # laptop replays each spoken line; off by default since it doubles the glasses
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(HERE, "events.log")
 HUD = os.path.join(HERE, "hud.html")
@@ -240,7 +241,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 audio = tts.speak(text)
                 # The laptop speaks too, for people nearby; the phone page fetches with quiet=1 so the laptop is not doubled.
-                if not q.get("quiet"):
+                if SPEAK_LAPTOP and not q.get("quiet"):
                     tts.play(audio)
                 return self.send(200, audio, "audio/L16; rate=16000")
             except Exception as e:  # any API failure: the glasses fall back to their built-in voice
