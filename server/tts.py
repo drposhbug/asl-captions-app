@@ -59,8 +59,22 @@ def warm(lines):
     return t
 
 
+DEVICE = os.environ.get("TTS_DEVICE", "")  # substring of the output device to use (e.g. "Realtek"); empty = system default
+
+
 def play(audio):
-    """Also plays the PCM on the laptop's speaker: louder for people nearby than the glasses' open-ear speakers."""
+    """Also plays the PCM on the laptop's speaker: louder for people nearby than the glasses' open-ear speakers.
+    With TTS_DEVICE set, plays on that output even when Windows' default is a monitor or headset."""
+    if DEVICE:
+        try:
+            import numpy as np
+            import sounddevice as sd
+            index = next(i for i, d in enumerate(sd.query_devices())
+                         if DEVICE.lower() in d["name"].lower() and d["max_output_channels"] > 0)
+            sd.play(np.frombuffer(audio, np.int16), 16000, device=index)
+            return True
+        except Exception as error:  # device missing or sounddevice absent: fall through to the default output
+            print("tts device", DEVICE, "unavailable:", error)
     try:
         import winsound
     except ImportError:  # not Windows: the glasses alone speak
