@@ -296,6 +296,21 @@ def camera_loop(server, index, rotate="cw", mirror=False):
 
     if live:
         threading.Thread(target=detector, daemon=True).start()
+    def retrain():
+        """Rebuild the model from every sample in a thread; the detector hot-reloads model.pkl when it lands."""
+        if state.get("training"):
+            return
+        def train():
+            try:
+                result = signs.train()
+                state["trained"] = f"trained {result['samples']} samples, held-out {result['accuracy']:.0%}"
+            except Exception as error:
+                state["trained"] = f"train failed: {error}"
+            print(state["trained"])
+            state["training"] = False
+        state["training"], state["trained"] = True, "training..."
+        threading.Thread(target=train, daemon=True).start()
+
     window = "ASL Captions - sign to speech"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)  # resizable, kept smaller than a 1080p laptop screen
     cv2.resizeWindow(window, 405, 720)
@@ -352,6 +367,10 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         bottom = shown.shape[0]
         hands = state.get("hands") or []
         rec_label, rec_until = server.recording
+        recording = time.time() < rec_until
+        if state.get("was_recording") and not recording:
+            retrain()  # every finished take trains in the background, so the model keeps up while takes continue
+        state["was_recording"] = recording
         lines = [f"1 camera  {state.get('fps', 0):.0f} fps",
                  f"2 hands   {len(hands)} " + " ".join(h["handedness"][0] for h in hands) + f"  {state['det_fps']:.0f}/s",
                  "3 model   " + ("  ".join(f"{l[:10]} {p:.0%}" for l, p in signs.latest["top"][:2]) or "-"),
@@ -362,7 +381,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         elif state.get("trained"):
             lines.append(state["trained"])
         else:
-            lines.append("keys: 1-7 start/stop a phrase take, 0 nothing, u undo take, t train, q quit")
+            lines.append("keys: 1-7 start/stop a phrase take, 0 nothing, u undo take (then t), t train, q quit")
         for i, line in enumerate(lines):
             if line:
                 origin = (8, 22 + 20 * i)  # top-left: the bottom of a portrait frame falls off a laptop screen
@@ -392,16 +411,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
                 state["take_at"] = None
                 print(state["trained"])
             elif key == ord("t"):
-                def train():
-                    try:
-                        result = signs.train()
-                        state["trained"] = f"trained {result['samples']} samples, held-out {result['accuracy']:.0%}"
-                        state["take_at"] = None
-                    except Exception as error:
-                        state["trained"] = f"train failed: {error}"
-                    print(state["trained"])
-                state["trained"] = "training..."
-                threading.Thread(target=train, daemon=True).start()
+                retrain()
         except cv2.error as error:  # no display: keep tracking and speaking without the window
             print("no window:", error)
             window = None
