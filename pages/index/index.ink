@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b20-no-preview';
+const BUILD = 'b21-track-capture';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -26,7 +26,7 @@ const hubUrl = () => `http://${laptop}:8766`;
 const clipUrl = () => `http://${laptop}:8765/clips`;
 const handUrl = () => `http://${laptop}:8765/hands`;
 // One low-quality photo per PHOTO_MS goes to the hand server; slower than video but the only capture that works here.
-const PHOTO_MS = 700;
+const PHOTO_MS = 100;
 
 // Probes every candidate hub in parallel; resolves true when one answers so the page can start posting.
 function findLaptop() {
@@ -753,23 +753,50 @@ export default {
       postEvent('status', 'hands: starting camera');
       ctx = wx.createCanvasContext('hands');
       if (!ctx) throw new Error('Hand overlay canvas is missing');
-      // The wx photo camera is the one capture path proven on these glasses: MediaRecorder returns empty pieces.
+      // Two capture paths: ImageCapture on the video track (no system camera round trip, so it should be much
+      // faster) and the wx photo camera, proven on these glasses but ~1.3 s per shot. The first failure of the
+      // track path switches to the photo camera for the rest of the run.
       const camera = wx.media && wx.media.createCameraContext();
-      if (!camera) throw new Error('Camera is unavailable');
+      let capture = null;
+      if (typeof ImageCapture === 'function') {
+        try {
+          run.stream = await openCamera(640, 480);
+          capture = new ImageCapture(run.stream.getVideoTracks()[0]);
+        } catch (error) {
+          postEvent('status', `hands: no video track: ${(error && error.message) || error}`);
+          releaseCamera(run);
+        }
+      }
+      if (!camera && !capture) throw new Error('Camera is unavailable');
+      const shoot = async () => {
+        if (capture) {
+          try {
+            return await capture.takePhoto({ quality: 'low', enableSystemPreview: false });
+          } catch (error) {
+            postEvent('status', `hands: track capture failed, using photo camera: ${(error && error.message) || error}`);
+            capture = null;
+            releaseCamera(run);
+            if (!camera) throw error;
+          }
+        }
+        const photo = await camera.takePhoto({ quality: 'low', enableSystemPreview: false });
+        if (!photo || !photo.data) throw new Error('Camera returned no image');
+        return photo.data;
+      };
       const started = Date.now();
       let frames = 0;
       while (active()) {
         const shotAt = Date.now();
-        const photo = await camera.takePhoto({ quality: 'low', enableSystemPreview: false });
+        const photo = await shoot();
+        const shotMs = Date.now() - shotAt;
         if (!active()) break;
-        if (!photo || !photo.data) throw new Error('Camera returned no image');
         // 503 = the server has no hand model yet; keep streaming so the dashboard still mirrors the camera.
-        const { hands = [], gloss = null } = await postBinary(handUrl(), photo.data, 'image/jpeg', 30000, [503]);
+        const { hands = [], gloss = null } = await postBinary(handUrl(), photo, 'image/jpeg', 30000, [503]);
         if (!active()) break;
         this.drawHands(ctx, hands);
-        this.onGlossFrame(gloss, photo.data);
+        this.onGlossFrame(gloss, photo);
         frames += 1;
-        if (frames === 1) postEvent('status', `hands: first photo ${Math.round((photo.data.byteLength || 0) / 1024)} KB, round trip ${Date.now() - shotAt} ms`);
+        if (frames <= 3) postEvent('status', `hands: photo ${frames} via ${capture ? 'video track' : 'photo camera'} ${Math.round((photo.byteLength || photo.size || 0) / 1024)} KB, shot ${shotMs} ms, round trip ${Date.now() - shotAt} ms`);
         const seen = gloss ? `${gloss.label} ${Math.round(gloss.confidence * 100)}%` : `${hands.length} SEEN`;
         this.setData({ handStatus: `HANDS - ${seen} - ${((frames * 1000) / (Date.now() - started)).toFixed(1)} FPS` });
         const wait = PHOTO_MS - (Date.now() - shotAt);
