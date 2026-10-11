@@ -349,8 +349,10 @@ def camera_loop(server, index, rotate="cw", mirror=False):
                 time.sleep(1)
                 cap = open_camera()
                 stalls = 0
-            continue
-        stalls = 0
+                continue
+            # a slow frame is still a frame: keep tracking at 1 fps rather than showing nothing
+        else:
+            stalls = 0
         shown_n += 1
         if time.time() - shown_t >= 5:  # display rate, for lag debugging
             state["fps"] = shown_n / (time.time() - shown_t)
