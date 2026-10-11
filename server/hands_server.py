@@ -364,6 +364,10 @@ def camera_loop(server, index, rotate="cw", mirror=False):
     shown_n, shown_t, stalls = 0, time.time(), 0
     while True:
         read_at = time.time()
+        if live and server.last_at and read_at - server.last_at > 30:
+            # Watchdog: the camera handle can wedge after a USB stall and never recover; the launcher restarts us.
+            print("no camera frame for 30 s: exiting so the launcher restarts the hand server")
+            os._exit(3)
         ok, bgr = cap.read()
         if live and time.time() - read_at > 0.2:
             stalls += 1
