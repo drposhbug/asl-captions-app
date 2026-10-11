@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b23-warm-model';
+const BUILD = 'b24-photo-only';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -756,20 +756,10 @@ export default {
       postEvent('status', 'hands: starting camera');
       ctx = wx.createCanvasContext('hands');
       if (!ctx) throw new Error('Hand overlay canvas is missing');
-      // Two capture paths: ImageCapture on the video track (no system camera round trip, so it should be much
-      // faster) and the wx photo camera, proven on these glasses but ~1.3 s per shot. The first failure of the
-      // track path switches to the photo camera for the rest of the run.
+      // The wx photo camera is the fastest capture on these glasses (~1.3 s a shot, measured in b23): ImageCapture on the
+      // video track works but takes ~3.5 s, and MediaRecorder returns empty pieces. `capture` stays null on purpose.
       const camera = wx.media && wx.media.createCameraContext();
       let capture = null;
-      if (typeof ImageCapture === 'function') {
-        try {
-          run.stream = await openCamera(640, 480);
-          capture = new ImageCapture(run.stream.getVideoTracks()[0]);
-        } catch (error) {
-          postEvent('status', `hands: no video track: ${(error && error.message) || error}`);
-          releaseCamera(run);
-        }
-      }
       if (!camera && !capture) throw new Error('Camera is unavailable');
       const shoot = async () => {
         if (capture) {
