@@ -57,12 +57,12 @@ export class GlossStream {
 // The signer's own phrases: these gloss sets are spoken word for word, skipping the language model.
 // Keyed by sorted glosses, since ASL order varies ("WHERE GATE C4" = "GATE C4 WHERE").
 const PHRASES = [
-  ['WHICH GATE THIS', 'Which gate is this?'],
+  ['WHICH GATE THIS', 'Which gate did they say?'],
   ['ME DEAF', "I'm deaf."],
   ['THIS GATE C4', 'Is this gate C4?'],
   ['WHERE GATE C4', 'Where is gate C4?'],
   ['THIS FLIGHT DELAYED', 'Is this flight delayed?'],
-  ['WHEN FOOD ARRIVE', 'When will the food arrive?'],
+  ['WHEN FOOD ARRIVE', 'When does the food arrive?'],
   ['ME LOST', "I'm lost."],
 ];
 const phraseKey = (glosses) => glosses.join(' ').toUpperCase().replace(/\bI\b/g, 'ME').replace(/\bC 4\b/g, 'C4')

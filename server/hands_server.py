@@ -18,6 +18,7 @@ Run:       python hands_server.py [--save-frames] [--camera N|clip.mp4 [--rotate
 Self-check: python hands_server.py --selftest
 """
 import json
+from collections import Counter
 import os
 import re
 import sys
@@ -160,6 +161,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
     print(f"Tracking hands from camera {index} (rotate {rotate}, mirror {'on' if mirror else 'off'}); "
           f"sentences go to the glasses via {HUB_URL}/say")
     glosses, candidate, held, last_activity = [], None, 0, 0.0
+    votes = Counter()  # phrase-level labels (import_sheet.py) flicker frame to frame: the sentence is the vote
     while True:
         ok, bgr = cap.read()
         if not ok:
@@ -186,6 +188,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         label = sign["label"] if sign else None
         if label:
             last_activity = now
+            votes[label] += sign["confidence"]
             held = held + 1 if label == candidate else 1
             candidate = label
             if held == COMMIT_FRAMES and (not glosses or glosses[-1] != label):
@@ -195,16 +198,16 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             candidate, held = None, 0
         if glosses and now - last_activity > SENTENCE_GAP_S:
             # The signer's own phrases skip the model, as fillSentence does on the glasses.
-            text = phrases.match(glosses) or (
+            text = phrases.match(glosses) or phrases.match([votes.most_common(1)[0][0]]) or (
                 polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + ".")
-            print("sentence", glosses, "->", text)
+            print("sentence", glosses, dict(votes), "->", text)
             body = json.dumps({"text": text, "glosses": " ".join(glosses)}).encode()
             try:
                 urllib.request.urlopen(urllib.request.Request(
                     HUB_URL + "/say", data=body, headers={"Content-Type": "application/json"}), timeout=5)
             except Exception as error:
                 print("hub unreachable:", error)
-            glosses = []
+            glosses, votes = [], Counter()
 
 
 class Handler(BaseHTTPRequestHandler):

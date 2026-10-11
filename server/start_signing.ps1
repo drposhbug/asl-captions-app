@@ -10,5 +10,6 @@ if (-not $hubUp) {
 } else { Write-Host "hub already running" }
 Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'hands_server' -and $_.Name -eq 'python.exe' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host "stopped old hand server $($_.ProcessId)" }
 Start-Process powershell -WorkingDirectory $here -ArgumentList '-NoExit','-Command',"`$host.UI.RawUI.WindowTitle = 'ASL hands - keep open'; & 'C:\Users\thorn\miniconda3\envs\wilor\python.exe' hands_server.py --save-frames --camera $Camera --rotate $Rotate"
-Write-Host "hand server starting on $Camera (rotate $Rotate). Needs server\signs\model.pkl (train from the dashboard or import_cindy.py) to recognise signs."
+Start-Process "http://127.0.0.1:8766/?speaker"
+Write-Host "hand server starting on $Camera (rotate $Rotate). Needs server\signs\model.pkl to recognise signs: build it with the wilor python (C:\Users\thorn\miniconda3\envs\wilor\python.exe) via 'python server\import_sheet.py' then 'python server\signs.py train', or train from the dashboard."
 Write-Host "Watch: http://127.0.0.1:8766/ (dashboard)  http://127.0.0.1:8766/?speaker (big spoken-sentence screen)"
