@@ -27,3 +27,4 @@ HUD page: ARM ALERTS button (tap once: wake lock + test buzz). Each new `/alerts
 3. Test: `curl -X POST http://127.0.0.1:8766/test-alert` -> phone flashes and buzzes.
 Limit: it only buzzes while the app is open and on screen (no push notifications; Android stops JS when the app is backgrounded or the screen locks — the wake lock keeps the screen on). Over plain LAN http the page still works but cannot be installed (service worker needs https).
 - `--gain <float>` multiplies the mic before speech detection (default 1.0); the hub prints `mic level: rms/floor/trigger` every 10 s so you can see whether a talker crosses the trigger.
+- Offline captions: `STT_BACKEND=local` makes the hub transcribe the laptop mic with faster-whisper (base.en, CPU, ~1 s per utterance; `STT_LOCAL_MODEL=tiny.en` is 3x faster). Without the variable the hub uses ElevenLabs and falls back to local if the key is refused.
