@@ -1,6 +1,8 @@
 # Hub (port 8766)
 Run: `python hub.py [--sounds] [--yamnet]` (Python313: `C:\Users\thorn\AppData\Local\Programs\Python\Python313\python.exe`); self-check: `python hub.py --selftest`.
 `--sounds` listens on the laptop mic (loudness detector, kind "other"); add `--yamnet` for YAMNet classes (needs tensorflow, tensorflow-hub, sounddevice).
+`--mic ace` picks the input device whose name contains `ace` (case-insensitive, e.g. the Insta360 Ace Pro 2 in webcam mode) instead of the default mic; it prints every input device at startup and exits with that list if nothing matches. With `--stereo` a 1-channel device falls back to mono (warning printed).
+`POST /record` (no body, no `label`) -> pushes alert kind `record` (label "") plus a `status` event; the glasses toggle a clip recording. With `?label=X&seconds=3` it is still relayed to the hand server (sign samples).
 `POST /events` `{"type":"caption|sign|sentence|alert|status","text":str,"confidence":float|null,"label":str|null,"at":ms|null}` -> `{"ok":true}` (ring of 500 + `events.log`).
 `GET /events?since=<id>` -> `{"events":[{"id",...}],"next":<id>}`.
 `GET /alerts?since=<id>` -> `{"alerts":[{"id","kind":"fire_alarm|siren|car_horn|door_knock|other","label","confidence","at"}],"next":<id>}`.

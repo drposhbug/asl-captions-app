@@ -1,8 +1,9 @@
 """Event hub for the glasses: captions/signs/sentences/alerts in, HUD mirror page and sound alerts out.
 
-Run:        python hub.py [--sounds] [--yamnet]
+Run:        python hub.py [--sounds] [--yamnet] [--stereo] [--mic <name substring>]
             --sounds  listen on the laptop mic and push sound alerts (loudness detector by default)
             --yamnet  with --sounds, classify sounds with YAMNet (needs tensorflow, tensorflow_hub)
+            --mic ace use the input device whose name contains "ace" (case-insensitive) instead of the default
 Self-check: python hub.py --selftest
 """
 import json
@@ -281,6 +282,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {"ok": True, "samples": voices.enroll(name, np.concatenate(waves))})
             except Exception as e:  # e.g. resemblyzer/torch missing
                 return self.send(500, {"error": str(e)[:200]})
+        if urlparse(self.path).path == "/record" and "label" not in parse_qs(urlparse(self.path).query):
+            # no label: the phone/dashboard asks the glasses to start or stop a clip (kind "record" alert, like /say)
+            push_alert("record", "", 1.0)
+            add_event({"type": "status", "text": "record toggled from dashboard", "confidence": None, "label": None, "at": now_ms()})
+            return self.send(200, {"ok": True})
         if urlparse(self.path).path in ("/record", "/train"):
             return self.relay("POST")
         if urlparse(self.path).path == "/test-alert":
@@ -428,20 +434,38 @@ def identify_speaker():
         print("speaker id failed:", e)
 
 
-def listen(use_yamnet):
+def pick_mic(stereo):
+    """--mic <substring>: (device index whose name contains it, stereo still possible); (None, stereo) = default mic."""
+    if "--mic" not in sys.argv:
+        return None, stereo
+    import sounddevice as sd
+    want = sys.argv[sys.argv.index("--mic") + 1].lower()
+    inputs = [(i, d) for i, d in enumerate(sd.query_devices()) if d["max_input_channels"] > 0]
+    print("input devices:\n" + "\n".join("  %2d  %s (%d in)" % (i, d["name"], d["max_input_channels"]) for i, d in inputs))
+    match = [(i, d) for i, d in inputs if want in d["name"].lower()]
+    if not match:
+        sys.exit("--mic %r: no input device name contains it; pick one from the list above" % want)
+    i, d = match[0]
+    print("mic: %d %s (%d in)" % (i, d["name"], d["max_input_channels"]))
+    if stereo and d["max_input_channels"] < 2:
+        print("warning: that mic has 1 input channel, so --stereo is off (mono, no direction)")
+        stereo = False
+    return i, stereo
+
+
+def listen(use_yamnet, device=None, stereo_mode=False):
     global mic_on
     import sounddevice as sd
     classify = yamnet_classifier() if use_yamnet else loudness_classifier()
     print("sound alerts on (%s)" % ("YAMNet" if use_yamnet else "loudness detector"))
     last = {}
-    # --stereo: read both channels of a stereo mic (chest camera, laptop array) to tell which side a sound is on.
-    stereo_mode = "--stereo" in sys.argv
+    # stereo_mode (--stereo): read both channels of a stereo mic (chest camera, laptop array) to tell which side a sound is on.
     import numpy as np
     import stt
     use_stt, utterance = stt.available(), []
     if use_stt:
         print("laptop captions on (ElevenLabs Scribe)")
-    with sd.InputStream(samplerate=RATE, channels=2 if stereo_mode else 1, dtype="float32") as stream:
+    with sd.InputStream(samplerate=RATE, channels=2 if stereo_mode else 1, dtype="float32", device=device) as stream:
         while True:
             mic_on = True
             frames = stream.read(WINDOW)[0]
@@ -522,8 +546,13 @@ def selftest():
         raise AssertionError("say without glosses accepted")
     except Exception as e:
         assert getattr(e, "code", None) == 400, e
+    with urlopen(Request(base + "/record", data=b"", method="POST")) as r:  # no label: toggle a clip on the glasses
+        assert json.loads(r.read()) == {"ok": True}
+    rec = json.loads(call("/alerts?since=%d" % s[0]["id"]))["alerts"]
+    assert [(x["kind"], x["label"]) for x in rec] == [("record", "")], rec
+    assert [(e["type"], e["text"]) for e in json.loads(call("/events?since=%d" % s[0]["id"]))["events"]] == [("sign", "HELLO"), ("alert", ""), ("status", "record toggled from dashboard")]
     with open(LOG) as f:
-        assert len(f.read().splitlines()) == 5
+        assert len(f.read().splitlines()) == 7
     global HAND_URL
     hand = ThreadingHTTPServer(("127.0.0.1", 0), type("Stub", (Handler,), {  # fake hand server echoing the path
         "do_GET": lambda h: h.send(200, {"path": h.path}), "do_POST": lambda h: h.send(400, {"path": h.path})}))
@@ -569,6 +598,18 @@ def selftest():
     assert r == {"ok": True, "samples": ["BOB", WINDOW]}, r
     assert json.loads(call("/speaker/clear?name=alice", {})) == {"ok": True}
     assert json.loads(call("/speaker/profiles")) == {}
+    # --mic: stub sounddevice so the check needs no audio hardware
+    import types
+    sys.modules["sounddevice"] = types.SimpleNamespace(query_devices=lambda: [
+        {"name": "Speakers", "max_input_channels": 0}, {"name": "Insta360 Ace Pro 2", "max_input_channels": 1}])
+    sys.argv[1:] = ["--mic", "ACE"]
+    assert pick_mic(True) == (1, False)  # mono device: --stereo falls back
+    sys.argv[1:] = ["--mic", "nope"]
+    try:
+        pick_mic(False)
+        raise AssertionError("unknown mic accepted")
+    except SystemExit:
+        pass
     print("selftest ok")
     server.shutdown()
 
@@ -578,6 +619,7 @@ if __name__ == "__main__":
         selftest()
         sys.exit(0)
     if "--sounds" in sys.argv:
-        threading.Thread(target=listen, args=("--yamnet" in sys.argv,), daemon=True).start()
+        device, stereo = pick_mic("--stereo" in sys.argv)  # before the thread so a bad --mic exits with a message
+        threading.Thread(target=listen, args=("--yamnet" in sys.argv, device, stereo), daemon=True).start()
     print("hub on http://0.0.0.0:%d" % PORT)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

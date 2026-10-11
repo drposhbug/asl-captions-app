@@ -31,6 +31,11 @@
   #voices input, #voices button, #train input, #train button { font: inherit; background: #000; color: #40ff5e; border: 1px solid #40ff5e; padding: 6px 10px; }
   #voices pre, #train pre { font-size: 0.85rem; white-space: pre-wrap; }
   #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* phone control panel: big touch targets, three alarm angles on one row */
+  #phone { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 8px; }
+  #phone button { font: inherit; font-size: 1.1rem; font-weight: bold; padding: 18px 8px; background: #000; color: #40ff5e; border: 1px solid #40ff5e; }
+  #phone .wide, #pbuild { grid-column: 1 / -1; }
+  #pbuild { font-family: monospace; opacity: 0.7; }
 </style>
 </head>
 <body>
@@ -43,6 +48,14 @@
     fetch('/test-alert', { method: 'POST' }).catch(function () {});
   };
 </script>
+<div id="phone">
+  <button class="wide" id="psay">SAY TEST LINE</button>
+  <button class="wide" id="prec">RECORD CLIP</button>
+  <button data-angle="-45">ALARM &lt;&lt;&lt; 45°</button>
+  <button data-angle="0">ALARM ^ AHEAD</button>
+  <button data-angle="45">ALARM 45° &gt;&gt;&gt;</button>
+  <div id="pbuild" aria-live="polite">glasses build: none seen yet</div>
+</div>
 <h2>Sentence</h2>
 <div id="sentence" aria-live="polite"></div>
 <div class="bar"><div class="track"><div class="fill" id="conf"></div></div><span id="pct"></span></div>
@@ -111,6 +124,15 @@ document.addEventListener('keydown', ev => {
   if (line) fetch('/say', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ glosses: line[1], text: line[2] }) }).catch(err => console.warn('say failed', err));
 });
+
+// Phone control panel: the demo-key, TEST ALARM and clip-record hub calls as big buttons.
+const post = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: body && JSON.stringify(body) }).catch(err => console.warn(path, 'failed', err));
+$('psay').onclick = () => post('/say', { text: 'Hello! This is the ElevenLabs voice test.', glosses: 'HELLO TEST' });
+$('prec').onclick = () => post('/record');
+document.querySelectorAll('#phone [data-angle]').forEach(b => { b.onclick = () => post('/test-alert?angle=' + b.dataset.angle); });
+let build = null;  // latest "glasses build ..." status event; its `at` is the glasses' clock
+setInterval(() => { if (build) $('pbuild').textContent = build.text + ' · ' + Math.max(0, Math.round((Date.now() - build.at) / 1000)) + 's ago'; }, 1000);
 
 // Sign training: record labelled landmark samples on the hand server, then retrain (signs.py).
 $('tglosses').innerHTML = [...new Set(DEMO.map(d => d[1].split(' ')[0])), 'NOTHING'].map(g => '<option value="' + g + '">').join('');
@@ -193,6 +215,8 @@ function onEvent(e) {
     signs = signs.concat(e.text).slice(-12);
   } else if (e.type === 'caption') {
     captions = captions.concat(e).slice(-4);
+  } else if (e.type === 'status' && e.text.startsWith('glasses build ')) {
+    build = { text: e.text, at: e.at || Date.now() };
   }
   const line = document.createElement('div');
   line.textContent = new Date(e.at || Date.now()).toLocaleTimeString() + '  ' + e.type + '  ' + e.text;
@@ -249,14 +273,15 @@ async function poll() {
   try {
     const ev = await (await fetch('/events?since=' + evNext)).json();
     ev.events.forEach(onEvent);
-    ev.events.filter(e => e.type === 'alert' && e.label !== 'say').forEach(e => onAlert(e.id, e.text));
+    // "say" and "record" alerts are commands to the glasses, not alarms
+    ev.events.filter(e => e.type === 'alert' && e.label !== 'say' && e.label !== 'record').forEach(e => onAlert(e.id, e.text));
     evNext = ev.next;
     render();
     const al = await (await fetch('/alerts?since=' + alNext)).json();
     // A stereo mic adds which side the sound came from.
     const deg = n => typeof n === 'number' ? ' ' + Math.round(Math.abs(n)) + '°' : '';
     const withSide = a => (a.direction === 'left' ? '<<< ' : a.direction === 'center' ? '^ ' : '') + a.label + (a.direction === 'right' ? ' >>>' : '') + deg(a.angle);
-    al.alerts.filter(a => a.kind !== 'say').forEach(a => onAlert(a.id, withSide(a)));
+    al.alerts.filter(a => a.kind !== 'say' && a.kind !== 'record').forEach(a => onAlert(a.id, withSide(a)));
     alNext = al.next;
     primed = true;
   } catch (err) { console.warn('poll failed', err); }
