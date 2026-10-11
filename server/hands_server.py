@@ -164,7 +164,7 @@ def process_frame(server, bgr, jpeg):
 COMMIT_FRAMES = 3        # a gloss must hold this many frames (mirrors pages/index/signing.js)
 MAX_EDGE = 1280          # long edge fed to WiLoR in camera mode (see the resize in camera_loop)
 SENTENCE_GAP_S = 2.0     # hands gone or still for this long ends the sentence (a mid-phrase unsure classifier does not)
-STILL_EPS = 0.015        # wrist movement per processed frame below this counts as still
+STILL_SPEED = 0.12       # wrist speed (frame widths per second) below which a hand counts as still; landmark jitter is ~0.05/s
 HOLD_S = 0.4             # a phrase ends with the final handshape held still in view this long; swinging arms never do
 MIN_PHRASE_S = 1.5       # first to last confident frame: a single hand movement is shorter, every sheet phrase is longer
 # Every sheet phrase moves a wrist at least 0.16 of the frame (measured on the clips); a hand holding a phone
@@ -175,7 +175,7 @@ SURE_SHARE = 0.6         # vote share above which the classifier is trusted as i
 # Key 1 is retired with "Is this gate C4" (too close to "Where is gate C4").
 KEY_PHRASES = [None, "WHICH GATE THIS", "ME DEAF", "WHERE GATE C4", "THIS FLIGHT DELAYED", "WHEN FOOD ARRIVE", "ME LOST"]
 TAKE_S = 30              # safety cap on one training take; the same key pressed again stops it sooner
-MIN_VOTES = 10           # summed confidence (about 1.5 s of confident frames) before a sentence is spoken; one flick never reaches it
+MIN_VOTES = 6            # summed confidence before a sentence is spoken; MIN_PHRASE_S and HOLD_S carry the real-phrase test
 RECENCY_FRAMES = 10      # e-folding length of the sentence vote: the end of a sign (C4) decides, not the GATE it shares with WHICH GATE THIS
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
 
@@ -286,9 +286,10 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         # Activity = a confident label, or a hand that is moving. The phrase ends when hands stop or leave for
         # SENTENCE_GAP_S, not when the classifier merely loses confidence mid-sign.
         wrists = {h["handedness"]: np.asarray(h["points"][0]) for h in hands}
-        moving = any(side in state["wrists"] and np.linalg.norm(w - state["wrists"][side]) > STILL_EPS
+        dt = max(now - state.get("wrists_at", now - 0.05), 0.02)
+        moving = any(side in state["wrists"] and np.linalg.norm(w - state["wrists"][side]) / dt > STILL_SPEED
                      for side, w in wrists.items())
-        state["wrists"] = wrists
+        state["wrists"], state["wrists_at"] = wrists, now
         state["frames"].append((now, bool(hands), moving))
         if moving and state["glosses"]:
             state["last_activity"] = now
@@ -315,8 +316,11 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             length = now - state.get("first_label_at", now)
             hold = longest_hold(state["frames"], now - SENTENCE_GAP_S - 3.0)
             if sum(votes.values()) < MIN_VOTES or motion < MIN_MOTION or length < MIN_PHRASE_S + SENTENCE_GAP_S or hold < HOLD_S:
-                print(f"dropped (votes {sum(votes.values()):.1f}, motion {motion:.2f}, {length - SENTENCE_GAP_S:.1f} s, "
-                      f"hold {hold:.1f} s): a flick, a still hand or hands that just passed through, not a phrase", dict(votes))
+                why = ("too few frames" if sum(votes.values()) < MIN_VOTES else "no motion" if motion < MIN_MOTION
+                       else "too short" if length < MIN_PHRASE_S + SENTENCE_GAP_S else "no hold at the end")
+                state["said"] = f"(dropped: {why})"
+                print(f"dropped ({why}; votes {sum(votes.values()):.1f}, motion {motion:.2f}, {length - SENTENCE_GAP_S:.1f} s, "
+                      f"hold {hold:.1f} s)", dict(votes))
                 state["glosses"], state["votes"] = [], Counter()
                 return
             # The recency-weighted vote over the sentence wins over the last locked-in sign (sheet phrases are single
@@ -662,10 +666,26 @@ def selftest():
     print("selftest ok")
 
 
+class Tee:
+    """stdout that also appends to a file, flushed per line (the launcher window's own buffer never flushes)."""
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for stream in self.streams:
+            stream.write(text)
+            stream.flush()
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         selftest()
     else:
+        sys.stdout = sys.stderr = Tee(sys.stdout, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "hands.log"), "a", encoding="utf-8"))
         # Single-threaded on purpose: one GPU model, one frame at a time.
         server = HTTPServer(("0.0.0.0", PORT), Handler)
         server.pipeline = load_pipeline()
