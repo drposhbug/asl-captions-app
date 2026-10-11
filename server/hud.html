@@ -327,7 +327,7 @@ async function poll() {
     alNext = al.next;
     primed = true;
   } catch (err) { console.warn('poll failed', err); }
-  setTimeout(poll, 1000);
+  setTimeout(poll, 500);
 }
 poll();
 </script>

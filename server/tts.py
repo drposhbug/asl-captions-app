@@ -6,6 +6,7 @@ Audio is cached on disk by text, so repeated phrases cost one API call and play 
 import hashlib
 import json
 import os
+import threading
 import wave
 from urllib.request import Request, urlopen
 
@@ -18,11 +19,15 @@ def available():
     return bool(os.environ.get("ELEVENLABS_API_KEY"))
 
 
+def path(text):
+    return os.path.join(CACHE, hashlib.sha1(("%s|%s|en|%s" % (VOICE, MODEL, text)).encode()).hexdigest() + ".pcm")
+
+
 def speak(text):
     """Raw 16 kHz mono 16-bit PCM of `text`: the glasses play it without a decoder (MP3 support is undocumented)."""
-    path = os.path.join(CACHE, hashlib.sha1(("%s|%s|en|%s" % (VOICE, MODEL, text)).encode()).hexdigest() + ".pcm")
-    if os.path.exists(path):
-        with open(path, "rb") as f:
+    cached = path(text)
+    if os.path.exists(cached):
+        with open(cached, "rb") as f:
             return f.read()
     req = Request("https://api.elevenlabs.io/v1/text-to-speech/%s?output_format=pcm_16000" % VOICE,
                   data=json.dumps({"text": text, "model_id": MODEL, "language_code": "en"}).encode(),
@@ -31,9 +36,27 @@ def speak(text):
     with urlopen(req, timeout=15) as r:
         audio = r.read()
     os.makedirs(CACHE, exist_ok=True)
-    with open(path, "wb") as f:
+    with open(cached, "wb") as f:
         f.write(audio)
     return audio
+
+
+def warm(lines):
+    """Fetches the uncached `lines` in a daemon thread so their first /tts plays from disk. Returns the thread."""
+    def run():
+        fetched = 0
+        for text in dict.fromkeys(lines):
+            if os.path.exists(path(text)):
+                continue
+            try:
+                speak(text)
+                fetched += 1
+            except Exception as e:
+                print("voice cache: %r failed: %s" % (text, e))
+        print("voice cache: %d lines ready (%d fetched)" % (sum(os.path.exists(path(t)) for t in set(lines)), fetched))
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
 
 
 def play(audio):

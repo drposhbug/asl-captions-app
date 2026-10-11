@@ -650,6 +650,15 @@ def selftest():
         raise AssertionError("unknown mic accepted")
     except SystemExit:
         pass
+    import contextlib
+    import io
+    import tempfile
+    import tts
+    tts.CACHE, out = tempfile.mkdtemp(), io.StringIO()  # warm must not fetch a cached line (no network, no key needed)
+    open(tts.path("warm test"), "wb").write(b"pcm")
+    with contextlib.redirect_stdout(out):
+        tts.warm(["warm test"]).join()
+    assert "voice cache: 1 lines ready (0 fetched)" in out.getvalue(), out.getvalue()
     print("selftest ok")
     server.shutdown()
 
@@ -661,5 +670,13 @@ if __name__ == "__main__":
     if "--sounds" in sys.argv:
         device, stereo = pick_mic("--stereo" in sys.argv)  # before the thread so a bad --mic exits with a message
         threading.Thread(target=listen, args=("--yamnet" in sys.argv, device, stereo), daemon=True).start()
+    import tts
+    if tts.available():  # pre-fetch the fixed lines so their first /tts plays from disk
+        with open(HUD, encoding="utf-8") as f:  # the DEMO sentences in hud.html: ['key', 'GLOSSES', 'sentence']
+            demo = [a or b for a, b in re.findall(r"^\s*\['.', '[^']*', (?:'([^']*)'|\"([^\"]*)\")\],", f.read(), re.M)]
+        tts.warm(["I'm deaf, please face me so I can read you.", "Please write it down or type it on your phone.",
+                  "I use sign language. Please speak slowly and clearly.", "Can you point me to the gate?",
+                  "I need help, please call someone who can sign.",  # QUICK_PHRASES in pages/index/index.ink
+                  "Jarvis online. ElevenLabs voice test.", "Hello! This is the ElevenLabs voice test.", "Yes.", "No."] + demo)
     print("hub on http://0.0.0.0:%d" % PORT)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
