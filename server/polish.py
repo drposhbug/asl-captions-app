@@ -117,9 +117,11 @@ PHRASE_MODEL = os.environ.get("PHRASE_MODEL", "claude-haiku-5-5")
 PICK_SYSTEM = (
     "A Deaf signer at an airport just signed one of these phrases:\n{options}\n"
     "A sign classifier trained on only 1-2 takes per phrase gives noisy vote shares; the three gate phrases are often "
-    "confused with each other. Use what people nearby just said (e.g. a gate announcement makes 'Which gate did they say?' "
-    "likely; a waiter makes the food question likely) and the image, if any, to pick what the signer most likely meant. "
-    "Reply with exactly one phrase from the list, copied verbatim, and nothing else."
+    "confused with each other. The classifier is the primary evidence: answer with its top phrase unless what people nearby "
+    "just said clearly points to another of the listed candidates (a gate announcement makes 'Which gate did they say?' "
+    "likely; a waiter makes the food question likely). Nearby speech that is unrelated, or that repeats one of the phrases "
+    "(the signer's own earlier sentence, spoken by a speaker), is not evidence. Never pick a phrase the classifier did "
+    "not list. Reply with exactly one phrase from the list, copied verbatim, and nothing else."
 )
 
 

@@ -78,7 +78,7 @@ def echo_of_spoken(text, now=None):
     for line, at in spoken:
         theirs = set(re.findall(r"[a-z0-9']+", line.lower()))
         shared = len(words & theirs)
-        if words and now - at < 20 and shared >= 3 and shared / len(words) >= 0.6:
+        if words and now - at < 20 and shared >= min(3, len(theirs)) and shared / len(words) >= 0.6:
             return True
     return False
 
@@ -660,6 +660,8 @@ def selftest():
     # the mic hears the hub's own voice: a caption that mostly repeats a just-spoken line is dropped
     spoken.append(("Hello! This is the ElevenLabs voice test.", time.time()))
     assert echo_of_spoken("hello hello this is the 11 labs voice test") and not echo_of_spoken("which gate is this")
+    spoken.append(("I'm lost.", time.time()))
+    assert echo_of_spoken("I'm lost") and not echo_of_spoken("I think the gate is lost somewhere"), "short lines echo too"
     assert not echo_of_spoken("hello this is the voice test", now=time.time() + 30)
     spoken.clear()
     # --mic: stub sounddevice so the check needs no audio hardware

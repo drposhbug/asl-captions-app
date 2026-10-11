@@ -148,6 +148,7 @@ SENTENCE_GAP_S = 1.5     # no gloss for this long ends the sentence
 # Every sheet phrase moves a wrist at least 0.16 of the frame (measured on the clips); a hand holding a phone
 # or resting jitters ~0.02-0.05. Below this the "sentence" is a still hand and nothing is spoken.
 MIN_MOTION = 0.10
+SURE_SHARE = 0.6         # vote share above which the classifier is trusted as is; below it Claude re-ranks with context
 MIN_VOTES = 6            # summed confidence (about 1.5 s of confident frames) before a sentence is spoken; a hand at rest never reaches it
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
 
@@ -217,7 +218,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             return []
         return [c["text"] for c in items if c["at"] > (time.time() - seconds) * 1000][-lines:]
 
-    state = {"glosses": [], "votes": Counter(), "moves": [], "candidate": None, "held": 0, "last_activity": 0.0,
+    state = {"glosses": [], "votes": Counter(), "moves": [], "said_at": deque(maxlen=8), "candidate": None, "held": 0, "last_activity": 0.0,
              "sign": "", "said": "", "det_fps": 0.0}
 
     def step(bgr):
@@ -253,8 +254,11 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             top = votes.most_common(3)
             winner = phrases.match([top[0][0]])
             candidates = [(phrases.match([k]), v / sum(votes.values())) for k, v in top if phrases.match([k])]
-            if winner and polish.available():  # Claude re-ranks the noisy vote using what people nearby just said
-                heard = recent_captions()
+            if winner and len(candidates) > 1 and candidates[0][1] < SURE_SHARE and polish.available():
+                # Claude re-ranks a close vote using what people nearby just said, minus echoes of our own voice.
+                said = {w for line, at in state["said_at"] if now - at < 60 for w in re.findall(r"[a-z']+", line.lower())}
+                heard = [c for c in recent_captions()
+                         if len(set(re.findall(r"[a-z']+", c.lower())) & said) < 2]
                 pick = polish.pick_phrase(candidates, heard)
                 print("pick", [(s, round(p, 2)) for s, p in candidates], f"captions {len(heard)}",
                       f"claude {pick!r} vote {winner!r}")
@@ -263,6 +267,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
                 polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + ".")
             print("sentence", glosses, {k: round(v, 1) for k, v in votes.items()}, f"motion {motion:.2f} ->", text)
             state["said"] = text
+            state["said_at"].append((text, now))
             say(text, glosses)
             state["glosses"], state["votes"] = [], Counter()
         elif not state["glosses"] and now - state["last_activity"] > SENTENCE_GAP_S:
@@ -327,11 +332,18 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             draw_hands(shown, server.last[1])
         bottom = shown.shape[0]
         hands = state.get("hands") or []
+        rec_label, rec_until = server.recording
         lines = [f"1 camera  {state.get('fps', 0):.0f} fps",
                  f"2 hands   {len(hands)} " + " ".join(h["handedness"][0] for h in hands) + f"  {state['det_fps']:.0f}/s",
                  "3 model   " + ("  ".join(f"{l[:10]} {p:.0%}" for l, p in signs.latest["top"][:2]) or "-"),
                  "4 sign    " + (state["sign"] or "-"),
                  "5 said    " + (state["said"] or "-")]
+        if time.time() < rec_until:
+            lines.append(f"REC {rec_label}  {rec_until - time.time():.1f} s  ({signs.counts().get(rec_label, 0)} samples)")
+        elif state.get("trained"):
+            lines.append(state["trained"])
+        else:
+            lines.append("keys: 1-7 record phrase, 0 record nothing, t train, q quit")
         for i, line in enumerate(lines):
             if line:
                 origin = (8, 22 + 20 * i)  # top-left: the bottom of a portrait frame falls off a laptop screen
@@ -339,8 +351,25 @@ def camera_loop(server, index, rotate="cw", mirror=False):
                 cv2.putText(shown, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (94, 255, 64), 1, cv2.LINE_AA)
         try:
             cv2.imshow(window, shown)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
                 break
+            # Record training takes on this very camera: 1-7 = the sheet phrases (in phrases.PHRASES order), 0 = NOTHING
+            # (hands at rest / holding a phone), t = retrain. Each take records 3 s of frames with hands.
+            if key in range(ord("0"), ord("8")):
+                label = "NOTHING" if key == ord("0") else phrases.PHRASES[key - ord("1")][0]
+                server.recording = (label, time.time() + 3)
+                print("recording", label)
+            elif key == ord("t"):
+                def train():
+                    try:
+                        result = signs.train()
+                        state["trained"] = f"trained {result['samples']} samples, held-out {result['accuracy']:.0%}"
+                    except Exception as error:
+                        state["trained"] = f"train failed: {error}"
+                    print(state["trained"])
+                state["trained"] = "training..."
+                threading.Thread(target=train, daemon=True).start()
         except cv2.error as error:  # no display: keep tracking and speaking without the window
             print("no window:", error)
             window = None
