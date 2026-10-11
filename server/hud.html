@@ -31,6 +31,9 @@
   #voices input, #voices button, #train input, #train button { font: inherit; background: #000; color: #40ff5e; border: 1px solid #40ff5e; padding: 6px 10px; }
   #voices pre, #train pre { font-size: 0.85rem; white-space: pre-wrap; }
   #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* ?speaker: the laptop as a big "phone" facing the hearing person: only the spoken sentence, huge, plus its voice */
+  body.speaker #arm, body.speaker #phone, body.speaker h2, body.speaker #signs, body.speaker #captions, body.speaker #log, body.speaker #keys { display: none; }
+  body.speaker #sentence { font-size: clamp(2.5rem, 9vw, 7rem); line-height: 1.15; min-height: 60vh; display: flex; align-items: center; }
   /* phone control panel: big touch targets, three alarm angles on one row */
   #phone { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 8px; }
   #phone button, #voices .big { font: inherit; font-size: 1.1rem; font-weight: bold; padding: 18px 8px; background: #000; color: #40ff5e; border: 1px solid #40ff5e; }
@@ -91,6 +94,7 @@
 </div>
 <h2>Sentence</h2>
 <div id="sentence" aria-live="polite"></div>
+<script>if (/[?&]speaker/.test(location.search)) { document.body.classList.add('speaker'); document.getElementById('sentence').textContent = 'Tap once, then sign. Your words appear here and are spoken.'; }</script>
 <div class="bar"><div class="track"><div class="fill" id="conf"></div></div><span id="pct"></span></div>
 <h2>Signs</h2>
 <div id="signs"></div>
