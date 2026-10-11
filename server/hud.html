@@ -249,8 +249,7 @@ function onAlert(id, label) {
   $('banner').hidden = false;
   clearTimeout(bannerTimer);
   clearInterval(buzzTimer);
-  buzz();
-  buzzTimer = setInterval(buzz, 3000);
+  buzz();  // one buzz: the glasses carry the alarm, the phone only confirms it
   bannerTimer = setTimeout(dismiss, 8000);
 }
 $('banner').onclick = dismiss;

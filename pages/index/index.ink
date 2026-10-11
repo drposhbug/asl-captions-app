@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b12-tap-phrase';
+const BUILD = 'b13-alarm-fix';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -273,15 +273,15 @@ export default {
     this.stopCaptions();
     this.stopHands();
     this.stopRecording();
-    clearInterval(this.alertTimer);
+    if (this.alertTimer) clearInterval(this.alertTimer);
     this.alertTimer = null;
-    clearInterval(this.handsTimer);
+    if (this.handsTimer) clearInterval(this.handsTimer);
     this.handsTimer = null;
-    clearInterval(this.speakerTimer);
+    if (this.speakerTimer) clearInterval(this.speakerTimer);
     this.speakerTimer = null;
-    clearInterval(this.captionTimer);
+    if (this.captionTimer) clearInterval(this.captionTimer);
     this.captionTimer = null;
-    clearInterval(this.laptopTimer);
+    if (this.laptopTimer) clearInterval(this.laptopTimer);
     this.laptopTimer = null;
     if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
     this.locationWatch = null;
@@ -322,20 +322,20 @@ export default {
     this.stopCaptions();
     this.stopHands();
     this.stopRecording();
-    clearInterval(this.alertTimer);
+    if (this.alertTimer) clearInterval(this.alertTimer);
     this.alertTimer = null;
-    clearInterval(this.handsTimer);
+    if (this.handsTimer) clearInterval(this.handsTimer);
     this.handsTimer = null;
-    clearInterval(this.speakerTimer);
+    if (this.speakerTimer) clearInterval(this.speakerTimer);
     this.speakerTimer = null;
-    clearInterval(this.captionTimer);
+    if (this.captionTimer) clearInterval(this.captionTimer);
     this.captionTimer = null;
-    clearInterval(this.laptopTimer);
+    if (this.laptopTimer) clearInterval(this.laptopTimer);
     this.laptopTimer = null;
     if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
     this.locationWatch = null;
-    clearTimeout(this.bannerTimer);
-    clearTimeout(this.quickTimer);
+    if (this.bannerTimer) clearTimeout(this.bannerTimer);
+    if (this.quickTimer) clearTimeout(this.quickTimer);
     if (this.grammar) this.grammar.destroy();
     this.grammar = null;
     if (this.labeler) this.labeler.destroy();
@@ -374,7 +374,7 @@ export default {
         this.polishUtterance();
         this.setData({ listening: false });
         // A short pause before restarting lets the cloud ASR drain its audio queue instead of overflowing it.
-        clearTimeout(this.captionRestart);
+        if (this.captionRestart) clearTimeout(this.captionRestart);
         this.captionRestart = setTimeout(() => {
           if (this.visible && !this.data.error && !this.data.listening && !this.uploading) this.startCaptions();
         }, 1500);
@@ -549,10 +549,13 @@ export default {
         this.captionSince = body.next;
         if (!primed) return;
         for (const caption of body.captions || []) {
-          if (this.heardAlready(caption.text)) continue;
-          const key = `laptop:${caption.id}`;
+          if (!caption.text || !caption.text.trim()) continue;
+          // The laptop's transcript (ElevenLabs Scribe) is cleaner than the glasses' own: it replaces the matching line.
+          const key = this.sameLine(caption.text) || `laptop:${caption.id}`;
           this.segments.set(key, caption.text);
-          this.marks.set(key, { confidence: null, label: caption.label || '' });
+          const mark = this.marks.get(key) || { confidence: null };
+          mark.label = caption.label || mark.label || '';
+          this.marks.set(key, mark);
         }
         this.renderCaptions();
       })
@@ -560,29 +563,30 @@ export default {
       .finally(() => { if (this.captionPolling === started) this.captionPolling = 0; });
   },
 
-  // The glasses usually hear the same sentence themselves: skip a laptop caption that mostly repeats a recent line.
-  heardAlready(text) {
+  // The glasses usually hear the same sentence themselves: the key of a recent line that mostly matches, else null.
+  sameLine(text) {
     const words = (t) => new Set((t || '').toLowerCase().match(/[a-z0-9']+/g) || []);
     const mine = words(text);
-    if (!mine.size) return true;
-    return Array.from(this.segments.values()).slice(-3).some((said) => {
+    if (!mine.size) return null;
+    const hit = Array.from(this.segments.entries()).slice(-3).find(([, said]) => {
       const theirs = words(said);
       let shared = 0;
       mine.forEach((w) => { if (theirs.has(w)) shared += 1; });
       return shared / mine.size >= 0.6;
     });
+    return hit ? hit[0] : null;
   },
 
   // An alarm takes over the whole display and flashes; a Deaf wearer must not be able to miss it.
   showBanner(banner, angle = null) {
-    clearTimeout(this.bannerTimer);
-    clearInterval(this.flashTimer);
+    if (this.bannerTimer) clearTimeout(this.bannerTimer);
+    if (this.flashTimer) clearInterval(this.flashTimer);
     const degrees = angle === null ? 0 : Math.round(Math.abs(angle));
     const bannerWhere = angle === null ? '' : degrees <= 10 ? 'AHEAD' : `${degrees}\u00B0 ${angle < 0 ? 'LEFT' : 'RIGHT'}`;
     this.setData({ banner, bannerAngle: angle === null ? null : Math.round(angle), bannerWhere, flash: true });
     this.flashTimer = setInterval(() => this.setData({ flash: !this.data.flash }), 250);
     this.bannerTimer = setTimeout(() => {
-      clearInterval(this.flashTimer);
+      if (this.flashTimer) clearInterval(this.flashTimer);
       this.setData({ banner: '', bannerAngle: null, bannerWhere: '', flash: false });
     }, BANNER_MS);
     postEvent('status', `alert shown on glasses: ${banner}${bannerWhere ? ` ${bannerWhere}` : ''}`);
@@ -590,7 +594,7 @@ export default {
 
   nextQuickPhrase() {
     this.quickIndex = (this.quickIndex + 1) % QUICK_PHRASES.length;
-    clearTimeout(this.quickTimer);
+    if (this.quickTimer) clearTimeout(this.quickTimer);
     this.setData({ quickPhrase: QUICK_PHRASES[this.quickIndex] });
     this.quickTimer = setTimeout(() => this.setData({ quickPhrase: '' }), QUICK_PHRASE_MS);
   },
@@ -618,7 +622,7 @@ export default {
   // Speaks the quick phrase or pending sentence on screen; returns false when there is none.
   confirmShown() {
     if (this.data.quickPhrase) {
-      clearTimeout(this.quickTimer);
+      if (this.quickTimer) clearTimeout(this.quickTimer);
       const phrase = this.data.quickPhrase;
       this.setData({ quickPhrase: '' });
       this.speakSentence(phrase, 100);
@@ -629,7 +633,7 @@ export default {
   },
 
   dismissShown() {
-    clearTimeout(this.quickTimer);
+    if (this.quickTimer) clearTimeout(this.quickTimer);
     this.pendingSentence = null;
     this.setData({ quickPhrase: '', sentence: '', sentencePercent: 0, sentenceStatus: 'DISMISSED' });
   },
@@ -714,7 +718,7 @@ export default {
         : `X - CLIP FAILED - ${message}` });
       postEvent('status', `clip failed: ${message}`);
     } finally {
-      clearTimeout(limit);
+      if (limit) clearTimeout(limit);
       if (stream) stream.getTracks().forEach((track) => track.stop());
       this.recorder = null;
       this.recording = false;
