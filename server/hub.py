@@ -1,9 +1,11 @@
 """Event hub for the glasses: captions/signs/sentences/alerts in, HUD mirror page and sound alerts out.
 
-Run:        python hub.py [--sounds] [--yamnet] [--stereo] [--mic <name substring>]
+Run:        python hub.py [--sounds] [--yamnet] [--stereo] [--mic <name substring>] [--gain <float>]
             --sounds  listen on the laptop mic and push sound alerts (loudness detector by default)
             --yamnet  with --sounds, classify sounds with YAMNet (needs tensorflow, tensorflow_hub)
             --mic ace use the input device whose name contains "ace" (case-insensitive) instead of the default
+            --gain 4  multiply the mic samples (clipped to +-1) before any detection; default 1.0.
+                      "mic level: rms .. floor .. trigger .." prints every 10 s: speech must cross the trigger.
 Self-check: python hub.py --selftest
 """
 import json
@@ -24,6 +26,7 @@ from urllib.request import Request, urlopen
 PORT = int(os.environ.get("PORT", 8766))  # App Platform sets PORT
 # Laptop hub with --forward <cloud hub url>: mic alarms are re-posted to the cloud hub the phone and glasses use.
 FORWARD_URL = sys.argv[sys.argv.index("--forward") + 1].rstrip("/") if "--forward" in sys.argv else None
+GAIN = float(sys.argv[sys.argv.index("--gain") + 1]) if "--gain" in sys.argv else 1.0  # mic sample multiplier
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(HERE, "events.log")
 HUD = os.path.join(HERE, "hud.html")
@@ -427,6 +430,27 @@ def loudness_classifier():
     return classify
 
 
+SPEECH_MARGIN_DB = 6.0  # a window counts as speech this far above the room's noise floor...
+SPEECH_MIN_DB = -60.0  # ...and above this absolute level, so hiss in a silent room never triggers
+FLOOR_WINDOWS = 30  # noise floor = quietest window of the last ~30 s
+
+
+def speech_gate():
+    """Adaptive speech trigger for the laptop captions: wave -> True when its RMS clears floor + margin.
+    The floor is a running minimum, so talking cannot raise it the way the loudness median does.
+    After each call .db/.floor/.trigger hold the levels (dBFS) for the "mic level" readout."""
+    import numpy as np
+    history = deque(maxlen=FLOOR_WINDOWS)
+
+    def voiced(wave):
+        voiced.db = float(20 * np.log10(np.sqrt(np.mean(wave ** 2)) + 1e-9))
+        history.append(voiced.db)
+        voiced.floor = min(history)
+        voiced.trigger = max(voiced.floor + SPEECH_MARGIN_DB, SPEECH_MIN_DB)
+        return voiced.db >= voiced.trigger
+    return voiced
+
+
 def identify_speaker():
     import numpy as np
     import speaker as voices
@@ -464,20 +488,25 @@ def listen(use_yamnet, device=None, stereo_mode=False):
     # stereo_mode (--stereo): read both channels of a stereo mic (chest camera, laptop array) to tell which side a sound is on.
     import numpy as np
     import stt
-    use_stt, utterance = stt.available(), []
+    use_stt, utterance, voiced, level_at = stt.available(), [], speech_gate(), 0.0
     if use_stt:
         print("laptop captions on (ElevenLabs Scribe)")
     with sd.InputStream(samplerate=RATE, channels=2 if stereo_mode else 1, dtype="float32", device=device) as stream:
         while True:
             mic_on = True
-            frames = stream.read(WINDOW)[0]
+            frames = np.clip(stream.read(WINDOW)[0] * GAIN, -1.0, 1.0)
             wave = frames.mean(axis=1) if stereo_mode else frames[:, 0]
             mic.append((time.time(), wave))
             hits = classify(wave)
             # Laptop captions: speech windows form one utterance, transcribed once it ends (or runs 12 s).
-            if use_stt and not stt.DISABLED and (getattr(classify, "speech", 0) >= 0.3 or utterance):
+            # The adaptive gate catches quiet talkers the classifier's speech score misses.
+            talking = voiced(wave) or getattr(classify, "speech", 0) >= 0.3
+            if time.time() >= level_at:
+                level_at = time.time() + 10
+                print("mic level: rms %.0f dB, floor %.0f dB, trigger %.0f dB" % (voiced.db, voiced.floor, voiced.trigger))
+            if use_stt and not stt.DISABLED and (talking or utterance):
                 utterance.append(wave)
-                if getattr(classify, "speech", 0) < 0.3 or len(utterance) >= 12:
+                if not talking or len(utterance) >= 12:
                     threading.Thread(target=caption_utterance, args=(np.concatenate(utterance), current_speaker()["name"]),
                                      daemon=True).start()
                     utterance = []
@@ -600,6 +629,14 @@ def selftest():
     assert r == {"ok": True, "samples": ["BOB", WINDOW]}, r
     assert json.loads(call("/speaker/clear?name=alice", {})) == {"ok": True}
     assert json.loads(call("/speaker/profiles")) == {}
+    # adaptive speech trigger: a tone 10 dB above the room floor fires, one at the floor does not
+    voiced = speech_gate()
+    tone = lambda db: np.sin(np.arange(WINDOW) * 2 * np.pi * 440 / RATE).astype(np.float32) * (10 ** (db / 20) * 2 ** 0.5)
+    assert not any(voiced(tone(-55)) for _ in range(5))  # room hiss settles the floor
+    assert voiced(tone(-45)) and round(voiced.floor) == -55 and round(voiced.trigger) == -49, (voiced.floor, voiced.trigger)
+    assert not voiced(tone(-55))
+    assert not voiced(tone(-70)) and not voiced(tone(-62))  # a near-silent room still needs SPEECH_MIN_DB
+    assert voiced(tone(-58))
     # --mic: stub sounddevice so the check needs no audio hardware
     import types
     sys.modules["sounddevice"] = types.SimpleNamespace(query_devices=lambda: [

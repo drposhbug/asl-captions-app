@@ -26,3 +26,4 @@ HUD page: ARM ALERTS button (tap once: wake lock + test buzz). Each new `/alerts
 2. On the phone open that URL in Chrome -> menu -> Add to Home screen -> open the app -> tap ARM ALERTS.
 3. Test: `curl -X POST http://127.0.0.1:8766/test-alert` -> phone flashes and buzzes.
 Limit: it only buzzes while the app is open and on screen (no push notifications; Android stops JS when the app is backgrounded or the screen locks — the wake lock keeps the screen on). Over plain LAN http the page still works but cannot be installed (service worker needs https).
+- `--gain <float>` multiplies the mic before speech detection (default 1.0); the hub prints `mic level: rms/floor/trigger` every 10 s so you can see whether a talker crosses the trigger.
