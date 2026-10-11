@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b24-photo-only';
+const BUILD = 'b25-frame-grab';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -756,15 +756,29 @@ export default {
       postEvent('status', 'hands: starting camera');
       ctx = wx.createCanvasContext('hands');
       if (!ctx) throw new Error('Hand overlay canvas is missing');
-      // The wx photo camera is the fastest capture on these glasses (~1.3 s a shot, measured in b23): ImageCapture on the
-      // video track works but takes ~3.5 s, and MediaRecorder returns empty pieces. `capture` stays null on purpose.
+      // Frame grab off the video track + createImageBlob: no system camera UI (takePhoto paints a green preview over the
+      // display) and no photo pipeline (1.3 s a shot). Falls back to the wx photo camera when the grab is unavailable or fails.
       const camera = wx.media && wx.media.createCameraContext();
       let capture = null;
+      if (typeof ImageCapture === 'function' && typeof createImageBlob === 'function') {
+        try {
+          run.stream = await openCamera(640, 480);
+          capture = new ImageCapture(run.stream.getVideoTracks()[0]);
+        } catch (error) {
+          postEvent('status', `hands: no video track: ${(error && error.message) || error}`);
+          releaseCamera(run);
+        }
+      } else postEvent('status', `hands: frame grab unavailable (ImageCapture ${typeof ImageCapture}, createImageBlob ${typeof createImageBlob})`);
       if (!camera && !capture) throw new Error('Camera is unavailable');
       const shoot = async () => {
         if (capture) {
           try {
-            return await capture.takePhoto({ quality: 'low', enableSystemPreview: false });
+            const bitmap = await capture.grabFrame();
+            try {
+              return await createImageBlob(bitmap, { type: 'image/jpeg', quality: 0.6 });
+            } finally {
+              bitmap.close();
+            }
           } catch (error) {
             postEvent('status', `hands: track capture failed, using photo camera: ${(error && error.message) || error}`);
             capture = null;
@@ -789,7 +803,7 @@ export default {
         this.drawHands(ctx, hands);
         this.onGlossFrame(gloss, photo);
         frames += 1;
-        if (frames <= 3) postEvent('status', `hands: photo ${frames} via ${capture ? 'video track' : 'photo camera'} ${Math.round((photo.byteLength || photo.size || 0) / 1024)} KB, shot ${shotMs} ms, round trip ${Date.now() - shotAt} ms`);
+        if (frames <= 3) postEvent('status', `hands: photo ${frames} via ${capture ? 'frame grab' : 'photo camera'} ${Math.round((photo.byteLength || photo.size || 0) / 1024)} KB, shot ${shotMs} ms, round trip ${Date.now() - shotAt} ms`);
         const seen = gloss ? `${gloss.label} ${Math.round(gloss.confidence * 100)}%` : `${hands.length} SEEN`;
         this.setData({ handStatus: `HANDS - ${seen} - ${((frames * 1000) / (Date.now() - started)).toFixed(1)} FPS` });
         const wait = PHOTO_MS - (Date.now() - shotAt);

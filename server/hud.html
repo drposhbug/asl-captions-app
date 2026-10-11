@@ -36,7 +36,10 @@
   #phone button, #voices .big { font: inherit; font-size: 1.1rem; font-weight: bold; padding: 18px 8px; background: #000; color: #40ff5e; border: 1px solid #40ff5e; }
   #phone .wide, #pbuild { grid-column: 1 / -1; }
   #pbuild { font-family: monospace; opacity: 0.7; }
-  #cam { width: 100%; max-height: 45vh; object-fit: contain; border: 1px solid #1a5a26; }
+  #camwrap { position: relative; border: 1px solid #1a5a26; }
+  #cam, #cam2 { display: block; width: 100%; max-height: 45vh; object-fit: contain; }
+  #cam2 { position: absolute; top: 0; left: 0; height: 100%; opacity: 0; transition: opacity 0.5s linear; }
+  #cam2.show { opacity: 1; }
   #nocam { padding: 18px 8px; text-align: center; opacity: 0.7; border: 1px dashed #1a5a26; }
   #voices .big { width: 100%; margin-top: 8px; }
 </style>
@@ -52,19 +55,29 @@
   };
 </script>
 <div id="phone">
-  <img id="cam" class="wide" alt="glasses camera with hand skeleton" hidden>
+  <div id="camwrap" class="wide" hidden><img id="cam" alt="glasses camera with hand skeleton"><img id="cam2" alt=""></div>
   <div id="nocam" class="wide">NO FEED FROM GLASSES (hands tracking off)</div>
   <script>
-    // Live glasses feed, relayed by the hub from the hand server, ~3 fps; placeholder after 3 s without a frame.
+    // Live glasses feed, relayed by the hub from the hand server (~1 fps from the glasses); each new frame dissolves
+    // over the last one so the slow feed reads as motion instead of jumps. Placeholder after 3 s without a frame.
     (function () {
-      var cam = document.getElementById('cam'), nocam = document.getElementById('nocam'), okAt = 0;
-      cam.onload = function () { okAt = Date.now(); };
-      cam.onerror = function () { okAt = 0; };
+      var cam = document.getElementById('cam'), cam2 = document.getElementById('cam2'), wrap = document.getElementById('camwrap'),
+          nocam = document.getElementById('nocam'), okAt = 0, loader = new Image(), fading = 0;
+      loader.onload = function () {
+        okAt = Date.now();
+        if (!cam.src) { cam.src = loader.src; return; }
+        if (fading || cam2.src === loader.src) return;
+        fading = 1;
+        cam2.src = loader.src;  // already fetched: shows at once, then fades in over the old frame
+        cam2.classList.add('show');
+        setTimeout(function () { cam.src = cam2.src; cam2.classList.remove('show'); fading = 0; }, 520);
+      };
+      loader.onerror = function () { okAt = 0; };
       setInterval(function () {
         if (document.hidden) return;
-        cam.src = '/preview.jpg?t=' + Date.now();
+        loader.src = '/preview.jpg?t=' + Date.now();
         var live = Date.now() - okAt < 3000;
-        cam.hidden = !live; nocam.hidden = live;
+        wrap.hidden = !live; nocam.hidden = live;
       }, 333);
     })();
   </script>
