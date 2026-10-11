@@ -481,6 +481,12 @@ def camera_loop(server, index, rotate="cw", mirror=False):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def handle(self):
+        try:
+            super().handle()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            pass  # the dashboard poll gave up before the reply was written: not an error worth a traceback
+
     def do_POST(self):
         url = urlparse(self.path)
         if url.path == "/clips":
