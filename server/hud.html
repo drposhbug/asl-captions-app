@@ -245,7 +245,8 @@ function onAlert(id, label) {
   if (seen.has(id)) return;
   seen.add(id);
   if (!primed) return;  // first poll only catches up; don't replay old alerts
-  $('banner').textContent = '⚠ ' + label;
+  // Short, repeated words read faster on a phone held at arm's length than the classifier's label.
+  $('banner').textContent = /fire/i.test(label) ? 'FIRE FIRE FIRE' : 'EMERGENCY EMERGENCY ' + label;
   $('banner').hidden = false;
   clearTimeout(bannerTimer);
   clearInterval(buzzTimer);
@@ -257,6 +258,7 @@ $('banner').onclick = dismiss;
 // The phone speaks each line too: the same ElevenLabs PCM the glasses play, unlocked by the first touch on the page.
 let audioCtx = null;
 let lastSpoken = { text: '', at: 0 };
+let playing = null;
 document.addEventListener('pointerdown', () => { audioCtx = audioCtx || new AudioContext(); audioCtx.resume(); });
 async function speakOnPhone(text) {
   // the say alert and the glasses' own sentence event carry the same line: play it once
@@ -268,10 +270,12 @@ async function speakOnPhone(text) {
     const pcm = new Int16Array(await r.arrayBuffer());
     const buf = audioCtx.createBuffer(1, pcm.length, 16000);
     buf.copyToChannel(Float32Array.from(pcm, s => s / 32768), 0);
+    if (playing) { try { playing.stop(); } catch (_) {} }  // a new line cuts the old one instead of overlapping
     const src = audioCtx.createBufferSource();
     src.buffer = buf;
     src.connect(audioCtx.destination);
     src.start();
+    playing = src;
   } catch (err) { console.warn('phone voice', err); }
 }
 

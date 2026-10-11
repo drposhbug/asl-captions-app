@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b13-alarm-fix';
+const BUILD = 'b14-no-overlap';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -896,10 +896,13 @@ export default {
       if (!pcm.length) throw new Error('tts returned no audio');
       const buffer = this.audioContext.createBuffer(1, pcm.length, 16000);
       buffer.copyToChannel(Float32Array.from(pcm, (s) => s / 32768), 0);
+      // A new line cuts the old one instead of overlapping it (rapid taps or dashboard keys).
+      if (this.voiceSource) { try { this.voiceSource.stop(); } catch (_) {} }
       const source = this.audioContext.createBufferSource();
       source.buffer = buffer;
       source.connect(this.audioContext.destination);
       source.start();
+      this.voiceSource = source;
       // Which voice played, so a tap test on the glasses shows whether ElevenLabs is working.
       this.setData({ sentenceStatus: `SPOKEN - ELEVENLABS (${(pcm.length / 16000).toFixed(1)} s)` });
       postEvent('status', `elevenlabs ok: ${(pcm.length / 16000).toFixed(1)} s`);
