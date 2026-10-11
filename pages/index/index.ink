@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b17-banner-only';
+const BUILD = 'b18-hands-trace';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -122,6 +122,8 @@ function recordPiece(stream, mimeType, ms) {
     };
     recorder.start();
     setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, ms);
+    // Some firmware never fires onstop: give up on the piece instead of hanging the loop forever.
+    setTimeout(() => resolve(null), ms + 4000);
   });
 }
 
@@ -770,6 +772,8 @@ export default {
       // The same recorder that makes clips (proven on these glasses), at low resolution and bitrate.
       run.stream = await openCamera(480, 360);
       if (!active()) return;
+      postEvent('status', 'hands: camera open');
+      this.setData({ handStatus: 'HANDS - CAMERA OPEN, RECORDING...' });
       const canCheck = typeof MediaRecorder.isTypeSupported === 'function';
       const mimeType = ['video/mp4', 'video/webm;codecs=vp8,opus'].find((type) => !canCheck || MediaRecorder.isTypeSupported(type));
       const type = mimeType.split(';')[0];
@@ -778,6 +782,7 @@ export default {
       while (active()) {
         const piece = await recordPiece(run.stream, mimeType, SEGMENT_MS);
         if (!active()) break;
+        if (!pieces && !uploading) postEvent('status', `hands: piece recorded ${piece ? Math.round((piece.size || 0) / 1024) : 0} KB`);
         // One upload in flight: if the last piece is still going up, drop this one rather than queue behind it.
         if (uploading || !piece) continue;
         const sentAt = Date.now();
