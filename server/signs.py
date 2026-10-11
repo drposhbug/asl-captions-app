@@ -58,8 +58,7 @@ def drop_since(at_ms):
     gone = len(load_samples()) - len(kept)
     if gone:
         with open(SAMPLES + ".tmp", "w", encoding="utf-8") as f:
-            f.writelines(json.dumps(s) + "
-" for s in kept)
+            f.writelines(json.dumps(s) + os.linesep.replace(os.linesep, chr(10)) for s in kept)
         os.replace(SAMPLES + ".tmp", SAMPLES)
     return gone
 
