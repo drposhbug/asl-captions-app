@@ -360,6 +360,13 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             if not live:
                 print("clip finished")
                 break
+            stalls += 1
+            if stalls >= 20:  # the camera went away (unplugged / left webcam mode): reopen until it is back
+                print("camera read failed 20 times: reopening (replug the camera if this repeats)")
+                cap.release()
+                time.sleep(2)
+                cap = open_camera()
+                stalls = 0
             time.sleep(0.1)
             continue
         # Match the training clips' geometry (camera clamped on its side on the chest, frames turned to
