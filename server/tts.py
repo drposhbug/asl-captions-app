@@ -6,6 +6,7 @@ Audio is cached on disk by text, so repeated phrases cost one API call and play 
 import hashlib
 import json
 import os
+import wave
 from urllib.request import Request, urlopen
 
 VOICE = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
@@ -33,3 +34,33 @@ def speak(text):
     with open(path, "wb") as f:
         f.write(audio)
     return audio
+
+
+def play(audio):
+    """Also plays the PCM on the laptop's speaker: louder for people nearby than the glasses' open-ear speakers."""
+    try:
+        import winsound
+    except ImportError:  # not Windows: the glasses alone speak
+        return False
+    # winsound cannot play async from memory, so the WAV lives in the cache next to the PCM.
+    path = os.path.join(CACHE, hashlib.sha1(audio).hexdigest() + ".wav")
+    if not os.path.exists(path):
+        os.makedirs(CACHE, exist_ok=True)
+        with wave.open(path, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(audio)
+    winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+    return path
+
+
+if __name__ == "__main__":  # python tts.py: plays the newest cached line on the laptop
+    import glob
+    import time
+    newest = max(glob.glob(os.path.join(CACHE, "*.pcm")), key=os.path.getmtime)
+    with open(newest, "rb") as f:
+        wav = play(f.read())
+    assert wav and os.path.getsize(wav) == os.path.getsize(newest) + 44, wav
+    time.sleep(3)
+    print("played", newest)
