@@ -163,7 +163,9 @@ def process_frame(server, bgr, jpeg):
 # hand tracking. No Wi-Fi upload, ~30 fps, ~100 ms latency; the glasses keep captions, display and speech.
 COMMIT_FRAMES = 3        # a gloss must hold this many frames (mirrors pages/index/signing.js)
 MAX_EDGE = 1280          # long edge fed to WiLoR in camera mode (see the resize in camera_loop)
-SENTENCE_GAP_S = 1.5     # no gloss for this long ends the sentence
+SENTENCE_GAP_S = 2.0     # hands gone or still for this long ends the sentence (a mid-phrase unsure classifier does not)
+STILL_EPS = 0.015        # wrist movement per processed frame below this counts as still
+MIN_PHRASE_S = 0.8       # first to last confident frame: an accidental flick is shorter, every sheet phrase is longer
 # Every sheet phrase moves a wrist at least 0.16 of the frame (measured on the clips); a hand holding a phone
 # or resting jitters ~0.02-0.05. Below this the "sentence" is a still hand and nothing is spoken.
 MIN_MOTION = 0.10
@@ -173,6 +175,7 @@ SURE_SHARE = 0.6         # vote share above which the classifier is trusted as i
 KEY_PHRASES = [None, "WHICH GATE THIS", "ME DEAF", "WHERE GATE C4", "THIS FLIGHT DELAYED", "WHEN FOOD ARRIVE", "ME LOST"]
 TAKE_S = 30              # safety cap on one training take; the same key pressed again stops it sooner
 MIN_VOTES = 6            # summed confidence (about 1.5 s of confident frames) before a sentence is spoken; a hand at rest never reaches it
+RECENCY_FRAMES = 10      # e-folding length of the sentence vote: the end of a sign (C4) decides, not the GATE it shares with WHICH GATE THIS
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
 
 
@@ -184,6 +187,14 @@ def wrist_span(frames):
         if len(w) > 2:
             best = max(best, float(np.linalg.norm(w.max(0) - w.min(0))))
     return best
+
+
+def recency_votes(frames, k=RECENCY_FRAMES):
+    """Confidence vote over [(label, confidence)] where the last frame weighs 1 and each earlier one e^(-1/k) less."""
+    votes = Counter()
+    for i, (label, confidence) in enumerate(reversed(frames)):
+        votes[label] += confidence * np.exp(-i / k)
+    return votes
 
 
 def draw_hands(frame, hands):
@@ -247,7 +258,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             return []
         return [c["text"] for c in items if c["at"] > (time.time() - seconds) * 1000][-lines:]
 
-    state = {"glosses": [], "votes": Counter(), "moves": [], "said_at": deque(maxlen=8), "candidate": None, "held": 0, "last_activity": 0.0,
+    state = {"glosses": [], "votes": Counter(), "moves": [], "labels": [], "wrists": {}, "said_at": deque(maxlen=8), "candidate": None, "held": 0, "last_activity": 0.0,
              "sign": "", "said": "", "det_fps": 0.0}
 
     def step(bgr):
@@ -257,10 +268,21 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         state["hands"] = hands
         now = time.time()
         label = sign["label"] if sign else None
+        # Activity = a confident label, or a hand that is moving. The phrase ends when hands stop or leave for
+        # SENTENCE_GAP_S, not when the classifier merely loses confidence mid-sign.
+        wrists = {h["handedness"]: np.asarray(h["points"][0]) for h in hands}
+        moving = any(side in state["wrists"] and np.linalg.norm(w - state["wrists"][side]) > STILL_EPS
+                     for side, w in wrists.items())
+        state["wrists"] = wrists
+        if moving and state["glosses"]:
+            state["last_activity"] = now
         if label:
             state["last_activity"] = now
+            if not state["labels"]:
+                state["first_label_at"] = now
             state["moves"].append(hands)
             state["votes"][label] += sign["confidence"]  # phrase labels flicker frame to frame: the sentence is the vote
+            state["labels"].append((label, sign["confidence"]))
             state["held"] = state["held"] + 1 if label == state["candidate"] else 1
             state["candidate"] = label
             if state["held"] == COMMIT_FRAMES and (not state["glosses"] or state["glosses"][-1] != label):
@@ -271,15 +293,18 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         else:
             state["candidate"], state["held"] = None, 0
         if state["glosses"] and now - state["last_activity"] > SENTENCE_GAP_S:
-            glosses, votes = state["glosses"], state["votes"]
+            glosses, votes, recent = state["glosses"], state["votes"], recency_votes(state["labels"])
             motion = wrist_span(state["moves"])
-            state["moves"] = []
-            if sum(votes.values()) < MIN_VOTES or motion < MIN_MOTION:
-                print(f"dropped (votes {sum(votes.values()):.1f}, motion {motion:.2f}): a still hand, not signing", dict(votes))
+            state["moves"], state["labels"] = [], []
+            length = now - state.get("first_label_at", now)
+            if sum(votes.values()) < MIN_VOTES or motion < MIN_MOTION or length < MIN_PHRASE_S + SENTENCE_GAP_S:
+                print(f"dropped (votes {sum(votes.values()):.1f}, motion {motion:.2f}, {length - SENTENCE_GAP_S:.1f} s): "
+                      "a flick or a still hand, not a phrase", dict(votes))
                 state["glosses"], state["votes"] = [], Counter()
                 return
-            # The vote over the whole sentence wins over the last locked-in sign (sheet phrases are single labels);
-            # multi-gloss signing still matches the signer's phrase table, then the language model.
+            # The recency-weighted vote over the sentence wins over the last locked-in sign (sheet phrases are single
+            # labels); multi-gloss signing still matches the signer's phrase table, then the language model.
+            votes = recent
             top = votes.most_common(3)
             winner = phrases.match([top[0][0]])
             candidates = [(phrases.match([k]), v / sum(votes.values())) for k, v in top if phrases.match([k])]
@@ -300,7 +325,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             say(text, glosses)
             state["glosses"], state["votes"] = [], Counter()
         elif not state["glosses"] and now - state["last_activity"] > SENTENCE_GAP_S:
-            state["votes"], state["moves"] = Counter(), []  # guesses that never locked in do not carry into the next phrase
+            state["votes"], state["moves"], state["labels"] = Counter(), [], []  # guesses that never locked in do not carry into the next phrase
 
     if polish.available():  # the first Claude call per process takes ~4 s (connection setup): pay it now, not on the first phrase
         threading.Thread(target=polish.pick_phrase, args=([("I'm deaf.", 1.0)], []), daemon=True).start()
@@ -588,6 +613,13 @@ def selftest():
     still = [[{"handedness": "Right", "points": [[0.5 + 0.01 * (i % 2), 0.5]] * 21}] for i in range(10)]
     moving = [[{"handedness": "Right", "points": [[0.2 + 0.05 * i, 0.5]] * 21}] for i in range(10)]
     assert wrist_span(still) < MIN_MOTION < wrist_span(moving), (wrist_span(still), wrist_span(moving))
+    # WHERE GATE C4 signed live: a short WHERE, a long GATE the model calls WHICH GATE THIS, then C4; the end decides
+    frames = [("WHERE GATE C4", 0.9)] * 3 + [("WHICH GATE THIS", 0.9)] * 20 + [("WHERE GATE C4", 0.9)] * 8
+    plain = Counter()
+    for label, confidence in frames:
+        plain[label] += confidence
+    assert plain.most_common(1)[0][0] == "WHICH GATE THIS" and recency_votes(frames).most_common(1)[0][0] == "WHERE GATE C4", recency_votes(frames)
+    assert recency_votes([]) == Counter() and abs(recency_votes([("A", 1.0)])["A"] - 1.0) < 1e-9
     pipeline = load_pipeline()
     _, blank = cv2.imencode(".jpg", np.zeros((480, 640, 3), np.uint8))
     assert detect(pipeline, decode(blank.tobytes())) == [], "blank frame should have no hands"
