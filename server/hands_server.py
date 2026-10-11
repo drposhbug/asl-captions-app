@@ -205,6 +205,14 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         except Exception as error:
             print("tts failed:", error)
 
+    def recent_captions(seconds=60, lines=5):
+        """What people near the signer said lately, from the hub; [] if it is down."""
+        try:
+            items = json.load(urllib.request.urlopen(HUB_URL + "/captions", timeout=1))["captions"]
+        except Exception:
+            return []
+        return [c["text"] for c in items if c["at"] > (time.time() - seconds) * 1000][-lines:]
+
     state = {"glosses": [], "votes": Counter(), "moves": [], "candidate": None, "held": 0, "last_activity": 0.0,
              "sign": "", "said": "", "det_fps": 0.0}
 
@@ -238,7 +246,16 @@ def camera_loop(server, index, rotate="cw", mirror=False):
                 return
             # The vote over the whole sentence wins over the last locked-in sign (sheet phrases are single labels);
             # multi-gloss signing still matches the signer's phrase table, then the language model.
-            text = phrases.match([votes.most_common(1)[0][0]]) or phrases.match(glosses) or (
+            top = votes.most_common(3)
+            winner = phrases.match([top[0][0]])
+            candidates = [(phrases.match([k]), v / sum(votes.values())) for k, v in top if phrases.match([k])]
+            if winner and polish.available():  # Claude re-ranks the noisy vote using what people nearby just said
+                heard = recent_captions()
+                pick = polish.pick_phrase(candidates, heard)
+                print("pick", [(s, round(p, 2)) for s, p in candidates], f"captions {len(heard)}",
+                      f"claude {pick!r} vote {winner!r}")
+                winner = pick or winner
+            text = winner or phrases.match(glosses) or (
                 polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + ".")
             print("sentence", glosses, {k: round(v, 1) for k, v in votes.items()}, f"motion {motion:.2f} ->", text)
             state["said"] = text
@@ -246,6 +263,9 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             state["glosses"], state["votes"] = [], Counter()
         elif not state["glosses"] and now - state["last_activity"] > SENTENCE_GAP_S:
             state["votes"], state["moves"] = Counter(), []  # guesses that never locked in do not carry into the next phrase
+
+    if polish.available():  # the first Claude call per process takes ~4 s (connection setup): pay it now, not on the first phrase
+        threading.Thread(target=polish.pick_phrase, args=([("I'm deaf.", 1.0)], []), daemon=True).start()
 
     pending = deque(maxlen=1)  # the newest camera frame: WiLoR (~0.2 s) takes whichever is current, the display never waits
 

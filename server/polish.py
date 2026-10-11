@@ -113,6 +113,47 @@ def sentence_from_glosses(glosses, context=()):
     return out or " ".join(glosses)
 
 
+PHRASE_MODEL = os.environ.get("PHRASE_MODEL", "claude-haiku-5-5")
+PICK_SYSTEM = (
+    "A Deaf signer at an airport just signed one of these phrases:\n{options}\n"
+    "A sign classifier trained on only 1-2 takes per phrase gives noisy vote shares; the three gate phrases are often "
+    "confused with each other. Use what people nearby just said (e.g. a gate announcement makes 'Which gate did they say?' "
+    "likely; a waiter makes the food question likely) and the image, if any, to pick what the signer most likely meant. "
+    "Reply with exactly one phrase from the list, copied verbatim, and nothing else."
+)
+
+
+def parse_pick(text, sentences):
+    """The reply if it is exactly one of the sentences (whitespace/quotes trimmed), else None."""
+    text = (text or "").strip().strip('"').strip()
+    return text if text in sentences else None
+
+
+def pick_phrase(candidates, captions, frame_b64=None):
+    """Most likely phrase sentence given [(sentence, vote share)] and recent nearby captions; None on any failure."""
+    global _client
+    try:
+        from phrases import PHRASES
+
+        sentences = [s for _, s in PHRASES]
+        if _client is None:
+            import anthropic
+
+            _client = anthropic.Anthropic(timeout=15.0, max_retries=1)
+        prompt = "\n".join(([f"Nearby speech: {c}" for c in captions if c] or ["Nearby speech: (none)"])
+                           + [f"Classifier: {s} ({share:.0%})" for s, share in candidates])
+        blocks = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": frame_b64}}] if frame_b64 else []
+        response = _client.with_options(timeout=4.0, max_retries=0).messages.create(
+            model=PHRASE_MODEL, max_tokens=64, output_config={"effort": "low"},
+            system=PICK_SYSTEM.format(options="\n".join(sentences)),
+            messages=[{"role": "user", "content": blocks + [{"type": "text", "text": prompt}]}],
+        )
+        return parse_pick("".join(b.text for b in response.content if b.type == "text"), sentences)
+    except Exception as error:
+        print("pick_phrase failed:", error)
+        return None
+
+
 def selftest():
     assert build_prompt("phrase verse", ["Hi there.", "", "How are you?"]) == (
         "Earlier: Hi there.\nEarlier: How are you?\nCaption: phrase verse"
@@ -121,6 +162,40 @@ def selftest():
     assert build_prompt("ok", [], "1.0, 2.0") == "Wearer location (lat, lon): 1.0, 2.0\nCaption: ok"
     assert [b["type"] for b in content("ok", [], None)] == ["text"]
     assert [b["type"] for b in content("ok", [], "AAAA")] == ["image", "text"]
+    global _client
+    sentences = ["I'm lost.", "Is this gate C4?"]
+    assert parse_pick(' "I\'m lost." ', sentences) == "I'm lost."
+    assert parse_pick("I'm lost", sentences) is None and parse_pick("I'm lost. Because...", sentences) is None
+    assert parse_pick("", sentences) is None and parse_pick(None, sentences) is None
+
+    class Stub:  # no network: canned replies through the real pick_phrase path
+        def __init__(self, reply):
+            self.reply = reply
+
+        def with_options(self, **_):
+            return self
+
+        @property
+        def messages(self):
+            return self
+
+        def create(self, **kwargs):
+            assert kwargs["model"] == PHRASE_MODEL
+            assert "Classifier: Is this gate C4? (60%)" in kwargs["messages"][0]["content"][-1]["text"]
+            if isinstance(self.reply, Exception):
+                raise self.reply
+            return type("R", (), {"content": [type("B", (), {"type": "text", "text": self.reply})()]})()
+
+    saved, cands = _client, [("Is this gate C4?", 0.6), ("Where is gate C4?", 0.3)]
+    try:
+        _client = Stub("Which gate did they say?")
+        assert pick_phrase(cands, ["Flight 220 now boarding at gate C4"]) == "Which gate did they say?"
+        _client = Stub("Probably: Which gate did they say?")
+        assert pick_phrase(cands, []) is None
+        _client = Stub(TimeoutError("slow"))
+        assert pick_phrase(cands, []) is None
+    finally:
+        _client = saved
     print("selftest ok")
 
 
