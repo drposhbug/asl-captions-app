@@ -13,14 +13,14 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b9-voice-test';
+const BUILD = 'b10-hotspot-ip';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
 const MAX_LINES = 4;
 // The laptop running server/hands_server.py; the glasses and laptop must share a network.
 // The laptop's address on each Wi-Fi we use (hackathon, Verizon hotspot); the first one whose hub answers wins.
-const LAPTOP_IPS = ['192.168.0.172', '172.16.241.181'];
+const LAPTOP_IPS = ['172.16.240.208', '192.168.0.172', '172.16.241.181'];
 let laptop = LAPTOP_IPS[0];
 const hubUrl = () => `http://${laptop}:8766`;
 const clipUrl = () => `http://${laptop}:8765/clips`;
