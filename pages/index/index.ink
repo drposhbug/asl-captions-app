@@ -571,7 +571,7 @@ export default {
     clearTimeout(this.bannerTimer);
     clearInterval(this.flashTimer);
     const degrees = angle === null ? 0 : Math.round(Math.abs(angle));
-    const bannerWhere = angle === null ? '' : degrees <= 10 ? 'AHEAD' : `${degrees}° ${angle < 0 ? 'LEFT' : 'RIGHT'}`;
+    const bannerWhere = angle === null ? '' : degrees <= 10 ? 'AHEAD' : `${degrees}\u00B0 ${angle < 0 ? 'LEFT' : 'RIGHT'}`;
     this.setData({ banner, bannerAngle: angle === null ? null : Math.round(angle), bannerWhere, flash: true });
     this.flashTimer = setInterval(() => this.setData({ flash: !this.data.flash }), 250);
     this.bannerTimer = setTimeout(() => {
