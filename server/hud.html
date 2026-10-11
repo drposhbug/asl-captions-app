@@ -259,7 +259,8 @@ $('banner').onclick = dismiss;
 let audioCtx = null;
 let lastSpoken = { text: '', at: 0 };
 let playing = null;
-document.addEventListener('pointerdown', () => { audioCtx = audioCtx || new AudioContext(); audioCtx.resume(); });
+// click, not pointerdown: a touch pointerdown is not a user activation for Chrome's autoplay rule, so the context stayed suspended on the phone
+document.addEventListener('click', () => { audioCtx = audioCtx || new AudioContext(); audioCtx.resume(); });
 async function speakOnPhone(text) {
   // the say alert and the glasses' own sentence event carry the same line: play it once
   if (!audioCtx || (text === lastSpoken.text && Date.now() - lastSpoken.at < 10000)) return;
