@@ -33,9 +33,12 @@
   #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* phone control panel: big touch targets, three alarm angles on one row */
   #phone { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 8px; }
-  #phone button { font: inherit; font-size: 1.1rem; font-weight: bold; padding: 18px 8px; background: #000; color: #40ff5e; border: 1px solid #40ff5e; }
+  #phone button, #voices .big { font: inherit; font-size: 1.1rem; font-weight: bold; padding: 18px 8px; background: #000; color: #40ff5e; border: 1px solid #40ff5e; }
   #phone .wide, #pbuild { grid-column: 1 / -1; }
   #pbuild { font-family: monospace; opacity: 0.7; }
+  #cam { width: 100%; max-height: 45vh; object-fit: contain; border: 1px solid #1a5a26; }
+  #nocam { padding: 18px 8px; text-align: center; opacity: 0.7; border: 1px dashed #1a5a26; }
+  #voices .big { width: 100%; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -49,8 +52,25 @@
   };
 </script>
 <div id="phone">
+  <img id="cam" class="wide" alt="glasses camera with hand skeleton" hidden>
+  <div id="nocam" class="wide">NO FEED FROM GLASSES (hands tracking off)</div>
+  <script>
+    // Live glasses feed, relayed by the hub from the hand server, ~3 fps; placeholder after 3 s without a frame.
+    (function () {
+      var cam = document.getElementById('cam'), nocam = document.getElementById('nocam'), okAt = 0;
+      cam.onload = function () { okAt = Date.now(); };
+      cam.onerror = function () { okAt = 0; };
+      setInterval(function () {
+        if (document.hidden) return;
+        cam.src = '/preview.jpg?t=' + Date.now();
+        var live = Date.now() - okAt < 3000;
+        cam.hidden = !live; nocam.hidden = live;
+      }, 333);
+    })();
+  </script>
   <button class="wide" id="psay">SAY TEST LINE</button>
   <button class="wide" id="prec">RECORD CLIP</button>
+  <button class="wide" id="pvoices">VOICES</button>
   <button data-angle="-45">ALARM &lt;&lt;&lt; 45°</button>
   <button data-angle="0">ALARM ^ AHEAD</button>
   <button data-angle="45">ALARM 45° &gt;&gt;&gt;</button>
@@ -61,17 +81,6 @@
 <div class="bar"><div class="track"><div class="fill" id="conf"></div></div><span id="pct"></span></div>
 <h2>Signs</h2>
 <div id="signs"></div>
-<img id="cam" alt="glasses camera with hand skeleton" hidden style="max-width:100%;border:1px solid #1a5a26">
-<script>
-  // Live glasses feed, relayed by the hub from the hand server; hidden until a frame arrives.
-  (function () {
-    var cam = document.getElementById('cam');
-    var src = '/preview.jpg?t=';
-    cam.onload = function () { cam.hidden = false; };
-    cam.onerror = function () { cam.hidden = true; };
-    setInterval(function () { cam.src = src + Date.now(); }, 250);
-  })();
-</script>
 <h2>Captions</h2>
 <div id="captions" aria-live="polite"></div>
 <h2>Log</h2>
@@ -89,8 +98,9 @@
 <section id="voices" hidden>
   <h2>Voices</h2>
   <div id="vnow" aria-live="polite" style="font-size:1.4rem;font-weight:bold;min-height:1.2em"></div>
-  <input id="vname" placeholder="NAME (YOU = wearer)" aria-label="voice name" maxlength="20">
-  <button id="venroll">ENROLL 5s</button>
+  <div>Type the person's name, press ENROLL 5s while they talk; their lines are then labelled on the glasses.</div>
+  <input id="vname" class="big" placeholder="NAME (YOU = wearer)" aria-label="voice name" maxlength="20">
+  <button id="venroll" class="big">ENROLL 5s</button>
   <pre id="vmsg" aria-live="polite"></pre>
   <div id="vlist" style="font-family:monospace;white-space:pre"></div>
 </section>
@@ -118,7 +128,7 @@ const DEMO = [
 document.addEventListener('keydown', ev => {
   if (ev.ctrlKey || ev.altKey || ev.metaKey || ev.target.tagName === 'INPUT') return;
   if (ev.key === '?') { $('keys').hidden = false; return; }
-  if (ev.key === 'v') { $('voices').hidden = !$('voices').hidden; if (!$('voices').hidden) { pollSpeaker(); loadVoices(); } return; }
+  if (ev.key === 'v') { toggleVoices(); return; }
   if (ev.key === 't') { $('train').hidden = !$('train').hidden; if (!$('train').hidden) pollRecord(); return; }
   const line = DEMO.find(d => d[0] === ev.key);
   if (line) fetch('/say', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -130,6 +140,12 @@ const post = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-T
   body: body && JSON.stringify(body) }).catch(err => console.warn(path, 'failed', err));
 $('psay').onclick = () => post('/say', { text: 'Hello! This is the ElevenLabs voice test.', glosses: 'HELLO TEST' });
 $('prec').onclick = () => post('/record');
+// Key v and the VOICES button share this: the section sits below the log, so scroll it into view when shown.
+function toggleVoices() {
+  $('voices').hidden = !$('voices').hidden;
+  if (!$('voices').hidden) { pollSpeaker(); loadVoices(); $('voices').scrollIntoView(); }
+}
+$('pvoices').onclick = toggleVoices;
 document.querySelectorAll('#phone [data-angle]').forEach(b => { b.onclick = () => post('/test-alert?angle=' + b.dataset.angle); });
 let build = null;  // latest "glasses build ..." status event; its `at` is the glasses' clock
 setInterval(() => { if (build) $('pbuild').textContent = build.text + ' · ' + Math.max(0, Math.round((Date.now() - build.at) / 1000)) + 's ago'; }, 1000);
