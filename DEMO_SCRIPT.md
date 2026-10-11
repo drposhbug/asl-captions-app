@@ -36,6 +36,12 @@ Signs come from a local landmark classifier (`server/signs.py`) once `server/sig
 3. Press TRAIN (or `python server/signs.py train`). The dashboard shows held-out accuracy per sign and the most confused pairs.
 4. For each confused pair: record more reps of both, or swap one for a more distinct sign in the script above. Retrain; the server picks up the new model on the next frame.
 
+### Importing Cindy's labelled clips
+Once `C:\Users\thorn\insta360_backup\labels.xlsx` has sign names typed in (uppercase, THANK-YOU style; `quality` = skip leaves a row out):
+1. `python server/import_cindy.py --dry-run` prints what it would add per sign and clip, and which rows are skipped (no sign, skip, missing `*_wilor_world_filled.jsonl` in `C:\Users\thorn\asl-project\recordings\sdcard`).
+2. `python server/import_cindy.py` appends the samples to `server/signs/samples.jsonl` (every 3rd observed frame; `--stride 1` for all). Observed hands outside every labelled segment of a clip become `NOTHING`.
+3. Train as above: `python server/signs.py train` or `t` on the dashboard. Rerunning the import appends again, so delete the earlier lines first if you re-import.
+
 ## Network and mic setup (do this before the demo)
 The phone hotspot hands the laptop a new address every session, so the glasses lose the hub. Make the laptop the hotspot instead: it is then always `192.168.137.1`, which the glasses probe first.
 1. Pixel: Settings > Network > Hotspot & tethering > USB tethering ON, with the phone plugged into the laptop. The laptop gets internet through the phone.
