@@ -176,7 +176,8 @@ SURE_SHARE = 0.6         # vote share above which the classifier is trusted as i
 # Key 1 is retired with "Is this gate C4" (too close to "Where is gate C4").
 KEY_PHRASES = [None, "WHICH GATE THIS", "ME DEAF", "WHERE GATE C4", "THIS FLIGHT DELAYED", "WHEN FOOD ARRIVE", "ME LOST"]
 TAKE_S = 30              # safety cap on one training take; the same key pressed again stops it sooner
-MIN_VOTES = 6            # summed confidence before a sentence is spoken; MIN_PHRASE_S and HOLD_S carry the real-phrase test
+MIN_LABEL_S = 1.2        # seconds of confident frames in a phrase before it is spoken; a frame count broke when the detection rate climbed
+WINNER_S = 0.8           # seconds of confident frames the winning label itself needs; flicker between labels never adds up
 RECENCY_FRAMES = 10      # e-folding length of the sentence vote: the end of a sign (C4) decides, not the GATE it shares with WHICH GATE THIS
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
 
@@ -189,6 +190,15 @@ def wrist_span(frames):
         if len(w) > 2:
             best = max(best, float(np.linalg.norm(w.max(0) - w.min(0))))
     return best
+
+
+def phrase_ok(label_time, winner):
+    """Why a finished phrase is not worth speaking, or None: enough confident signing in total, most of it on the winner."""
+    if sum(label_time.values()) < MIN_LABEL_S:
+        return "too little signing"
+    if label_time[winner] < WINNER_S:
+        return "no clear winner"
+    return None
 
 
 def recency_votes(frames, k=RECENCY_FRAMES):
@@ -274,7 +284,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             return []
         return [c["text"] for c in items if c["at"] > (time.time() - seconds) * 1000][-lines:]
 
-    state = {"glosses": [], "votes": Counter(), "moves": [], "labels": [], "wrists": {}, "frames": deque(maxlen=150), "said_at": deque(maxlen=8), "candidate": None, "held": 0, "last_activity": 0.0,
+    state = {"glosses": [], "label_time": Counter(), "moves": [], "labels": [], "wrists": {}, "frames": deque(maxlen=150), "said_at": deque(maxlen=8), "candidate": None, "held": 0, "last_activity": 0.0,
              "sign": "", "said": "", "det_fps": 0.0}
 
     def step(bgr):
@@ -294,12 +304,13 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         state["frames"].append((now, bool(hands), moving))
         if moving and state["glosses"]:
             state["last_activity"] = now
+        if hands and (label or state["labels"]):
+            state["moves"].append(hands)  # the whole phrase counts for motion, not only its confident frames
         if label:
             state["last_activity"] = now
             if not state["labels"]:
                 state["first_label_at"] = now
-            state["moves"].append(hands)
-            state["votes"][label] += sign["confidence"]  # phrase labels flicker frame to frame: the sentence is the vote
+            state["label_time"][label] += min(dt, 0.2)  # phrase labels flicker frame to frame: the sentence is the vote
             state["labels"].append((label, sign["confidence"]))
             state["held"] = state["held"] + 1 if label == state["candidate"] else 1
             state["candidate"] = label
@@ -311,23 +322,22 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         else:
             state["candidate"], state["held"] = None, 0
         if state["glosses"] and now - state["last_activity"] > SENTENCE_GAP_S:
-            glosses, votes, recent = state["glosses"], state["votes"], recency_votes(state["labels"])
+            glosses, votes, label_time = state["glosses"], recency_votes(state["labels"]), state["label_time"]
             motion = wrist_span(state["moves"])
             state["moves"], state["labels"] = [], []
             length = now - state.get("first_label_at", now)
             hold = longest_hold(state["frames"], now - SENTENCE_GAP_S - 3.0)
-            if sum(votes.values()) < MIN_VOTES or motion < MIN_MOTION or length < MIN_PHRASE_S + SENTENCE_GAP_S or hold < HOLD_S:
-                why = ("too few frames" if sum(votes.values()) < MIN_VOTES else "no motion" if motion < MIN_MOTION
-                       else "too short" if length < MIN_PHRASE_S + SENTENCE_GAP_S else "no hold at the end")
-                state["said"] = f"(dropped: {why})"
-                print(f"dropped ({why}; votes {sum(votes.values()):.1f}, motion {motion:.2f}, {length - SENTENCE_GAP_S:.1f} s, "
-                      f"hold {hold:.1f} s)", dict(votes))
-                state["glosses"], state["votes"] = [], Counter()
-                return
             # The recency-weighted vote over the sentence wins over the last locked-in sign (sheet phrases are single
             # labels); multi-gloss signing still matches the signer's phrase table, then the language model.
-            votes = recent
             top = votes.most_common(3)
+            why = phrase_ok(label_time, top[0][0]) or ("no motion" if motion < MIN_MOTION else "too short" if length < MIN_PHRASE_S + SENTENCE_GAP_S
+                                                       else "no hold at the end" if hold < HOLD_S else None)
+            if why:
+                state["said"] = f"(dropped: {why})"
+                print(f"dropped ({why}; signing {sum(label_time.values()):.1f} s, motion {motion:.2f}, {length - SENTENCE_GAP_S:.1f} s, "
+                      f"hold {hold:.1f} s)", {k: round(v, 2) for k, v in label_time.items()})
+                state["glosses"], state["label_time"] = [], Counter()
+                return
             winner = phrases.match([top[0][0]])
             candidates = [(phrases.match([k]), v / sum(votes.values())) for k, v in top if phrases.match([k])]
             if winner and len(candidates) > 1 and candidates[0][1] < SURE_SHARE and polish.available():
@@ -345,9 +355,9 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             state["said"] = text
             state["said_at"].append((text, now))
             say(text, glosses)
-            state["glosses"], state["votes"] = [], Counter()
+            state["glosses"], state["label_time"] = [], Counter()
         elif not state["glosses"] and now - state["last_activity"] > SENTENCE_GAP_S:
-            state["votes"], state["moves"], state["labels"] = Counter(), [], []  # guesses that never locked in do not carry into the next phrase
+            state["label_time"], state["moves"], state["labels"] = Counter(), [], []  # guesses that never locked in do not carry into the next phrase
 
     if polish.available():  # the first Claude call per process takes ~4 s (connection setup): pay it now, not on the first phrase
         threading.Thread(target=polish.pick_phrase, args=([("I'm deaf.", 1.0)], []), daemon=True).start()
@@ -364,7 +374,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
                 step(pending.pop())
             except Exception:  # one bad frame or a failed Claude call must not kill the only detector thread
                 traceback.print_exc()
-                state["glosses"], state["votes"], state["moves"], state["labels"] = [], Counter(), [], []
+                state["glosses"], state["label_time"], state["moves"], state["labels"] = [], Counter(), [], []
             state["det_fps"] = 1 / max(time.time() - t0, 1e-3)
 
     if live:
@@ -660,6 +670,10 @@ def selftest():
         plain[label] += confidence
     assert plain.most_common(1)[0][0] == "WHICH GATE THIS" and recency_votes(frames).most_common(1)[0][0] == "WHERE GATE C4", recency_votes(frames)
     assert recency_votes([]) == Counter() and abs(recency_votes([("A", 1.0)])["A"] - 1.0) < 1e-9
+    # a 2 s take with one dominant label speaks; a 0.3 s flicker burst or a 50/50 split between labels does not
+    assert phrase_ok(Counter({"WHERE GATE C4": 1.5, "WHEN FOOD ARRIVE": 0.5}), "WHERE GATE C4") is None
+    assert phrase_ok(Counter({"WHERE GATE C4": 0.2, "WHEN FOOD ARRIVE": 0.1}), "WHERE GATE C4") == "too little signing"
+    assert phrase_ok(Counter({"WHERE GATE C4": 0.7, "WHEN FOOD ARRIVE": 0.7}), "WHERE GATE C4") == "no clear winner"
     pipeline = load_pipeline()
     _, blank = cv2.imencode(".jpg", np.zeros((480, 640, 3), np.uint8))
     assert detect(pipeline, decode(blank.tobytes())) == [], "blank frame should have no hands"
