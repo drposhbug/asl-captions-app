@@ -145,8 +145,21 @@ def process_frame(server, bgr, jpeg):
 COMMIT_FRAMES = 3        # a gloss must hold this many frames (mirrors pages/index/signing.js)
 MAX_EDGE = 1280          # long edge fed to WiLoR in camera mode (see the resize in camera_loop)
 SENTENCE_GAP_S = 1.5     # no gloss for this long ends the sentence
+# Every sheet phrase moves a wrist at least 0.16 of the frame (measured on the clips); a hand holding a phone
+# or resting jitters ~0.02-0.05. Below this the "sentence" is a still hand and nothing is spoken.
+MIN_MOTION = 0.10
 MIN_VOTES = 6            # summed confidence (about 1.5 s of confident frames) before a sentence is spoken; a hand at rest never reaches it
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
+
+
+def wrist_span(frames):
+    """Largest distance the wrist of either hand side covered over these frames (normalised image units)."""
+    best = 0.0
+    for side in ("Left", "Right"):
+        w = np.array([h["points"][0] for hands in frames for h in hands if h["handedness"] == side])
+        if len(w) > 2:
+            best = max(best, float(np.linalg.norm(w.max(0) - w.min(0))))
+    return best
 
 
 def draw_hands(frame, hands):
@@ -192,7 +205,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         except Exception as error:
             print("tts failed:", error)
 
-    state = {"glosses": [], "votes": Counter(), "candidate": None, "held": 0, "last_activity": 0.0,
+    state = {"glosses": [], "votes": Counter(), "moves": [], "candidate": None, "held": 0, "last_activity": 0.0,
              "sign": "", "said": "", "det_fps": 0.0}
 
     def step(bgr):
@@ -204,6 +217,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         label = sign["label"] if sign else None
         if label:
             state["last_activity"] = now
+            state["moves"].append(hands)
             state["votes"][label] += sign["confidence"]  # phrase labels flicker frame to frame: the sentence is the vote
             state["held"] = state["held"] + 1 if label == state["candidate"] else 1
             state["candidate"] = label
@@ -216,17 +230,22 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             state["candidate"], state["held"] = None, 0
         if state["glosses"] and now - state["last_activity"] > SENTENCE_GAP_S:
             glosses, votes = state["glosses"], state["votes"]
-            if sum(votes.values()) < MIN_VOTES:
-                print("too short, dropped", glosses, dict(votes))
+            motion = wrist_span(state["moves"])
+            state["moves"] = []
+            if sum(votes.values()) < MIN_VOTES or motion < MIN_MOTION:
+                print(f"dropped (votes {sum(votes.values()):.1f}, motion {motion:.2f}): a still hand, not signing", dict(votes))
                 state["glosses"], state["votes"] = [], Counter()
                 return
-            # The signer's own phrases skip the model, as fillSentence does on the glasses.
-            text = phrases.match(glosses) or phrases.match([votes.most_common(1)[0][0]]) or (
+            # The vote over the whole sentence wins over the last locked-in sign (sheet phrases are single labels);
+            # multi-gloss signing still matches the signer's phrase table, then the language model.
+            text = phrases.match([votes.most_common(1)[0][0]]) or phrases.match(glosses) or (
                 polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + ".")
-            print("sentence", glosses, dict(votes), "->", text)
+            print("sentence", glosses, {k: round(v, 1) for k, v in votes.items()}, f"motion {motion:.2f} ->", text)
             state["said"] = text
             say(text, glosses)
             state["glosses"], state["votes"] = [], Counter()
+        elif not state["glosses"] and now - state["last_activity"] > SENTENCE_GAP_S:
+            state["votes"], state["moves"] = Counter(), []  # guesses that never locked in do not carry into the next phrase
 
     pending = deque(maxlen=1)  # the newest camera frame: WiLoR (~0.2 s) takes whichever is current, the display never waits
 
@@ -427,6 +446,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def selftest():
+    still = [[{"handedness": "Right", "points": [[0.5 + 0.01 * (i % 2), 0.5]] * 21}] for i in range(10)]
+    moving = [[{"handedness": "Right", "points": [[0.2 + 0.05 * i, 0.5]] * 21}] for i in range(10)]
+    assert wrist_span(still) < MIN_MOTION < wrist_span(moving), (wrist_span(still), wrist_span(moving))
     pipeline = load_pipeline()
     _, blank = cv2.imencode(".jpg", np.zeros((480, 640, 3), np.uint8))
     assert detect(pipeline, decode(blank.tobytes())) == [], "blank frame should have no hands"
