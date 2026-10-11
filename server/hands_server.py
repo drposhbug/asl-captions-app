@@ -176,7 +176,7 @@ SURE_SHARE = 0.6         # vote share above which the classifier is trusted as i
 # Key 1 is retired with "Is this gate C4" (too close to "Where is gate C4").
 KEY_PHRASES = [None, "WHICH GATE THIS", "ME DEAF", "WHERE GATE C4", "THIS FLIGHT DELAYED", "WHEN FOOD ARRIVE", "ME LOST"]
 TAKE_S = 30              # safety cap on one training take; the same key pressed again stops it sooner
-MIN_LABEL_S = 1.2        # seconds of confident frames in a phrase before it is spoken; a frame count broke when the detection rate climbed
+MIN_LABEL_S = 1.0        # seconds of confident frames in a phrase before it is spoken; a frame count broke when the detection rate climbed
 WINNER_S = 0.8           # seconds of confident frames the winning label itself needs; flicker between labels never adds up
 RECENCY_FRAMES = 10      # e-folding length of the sentence vote: the end of a sign (C4) decides, not the GATE it shares with WHICH GATE THIS
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
