@@ -182,15 +182,19 @@ def camera_loop(server, index, rotate="cw", mirror=False):
     # A file path replays a recorded clip through the same pipeline (landmarks, classifier, speech), no camera needed.
     sys.setswitchinterval(0.001)
     live = isinstance(index, int)
-    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW) if live else cv2.VideoCapture(index)
-    if live:
+
+    def open_camera():
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # compressed USB stream: fewer stalls
         cap.set(cv2.CAP_PROP_FPS, 30)
+        return cap
+
+    cap = open_camera() if live else cv2.VideoCapture(index)
     server.camera_mode = True  # glasses photos would fight the webcam for the GPU and overwrite the skeleton
     while live and not cap.isOpened():  # the camera may still be reconnecting after a replug: wait for it
         print(f"camera {index} not found, retrying in 3 s (replug the camera or check its USB webcam mode)")
         time.sleep(3)
-        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        cap = open_camera()
     if not cap.isOpened():
         print(f"camera {index} not found")
         return
@@ -295,12 +299,21 @@ def camera_loop(server, index, rotate="cw", mirror=False):
     window = "ASL Captions - sign to speech"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)  # resizable, kept smaller than a 1080p laptop screen
     cv2.resizeWindow(window, 405, 720)
-    shown_n, shown_t = 0, time.time()
+    shown_n, shown_t, stalls = 0, time.time(), 0
     while True:
         read_at = time.time()
         ok, bgr = cap.read()
         if live and time.time() - read_at > 0.2:
+            stalls += 1
             print(f"camera stalled {time.time() - read_at:.2f} s (ok={ok}): USB stream paused, not the model")
+            if stalls >= 5:  # the Ace Pro 2 webcam stream sometimes drops to 1 fps (green frames) until it is reopened
+                print("reopening the camera")
+                cap.release()
+                time.sleep(1)
+                cap = open_camera()
+                stalls = 0
+            continue
+        stalls = 0
         shown_n += 1
         if time.time() - shown_t >= 5:  # display rate, for lag debugging
             state["fps"] = shown_n / (time.time() - shown_t)
