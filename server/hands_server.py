@@ -12,7 +12,7 @@ Signs: a local landmark classifier (signs.py) once signs/model.pkl exists, else 
 POST /record?label=HELLO&seconds=3 saves the next 3 s of hands as samples, GET /record shows counts,
 POST /train retrains signs/model.pkl.
 
-Run:       python hands_server.py [--save-frames] [--camera N [--rotate cw|ccw|none] [--mirror]]
+Run:       python hands_server.py [--save-frames] [--camera N|clip.mp4 [--rotate cw|ccw|none] [--mirror]]
            (--camera: a laptop camera replaces the glasses' video; --rotate turns each frame into portrait
            like the chest-clamped Insta360 rig the sign model is trained on, default cw; --mirror flips it)
 Self-check: python hands_server.py --selftest
@@ -151,7 +151,8 @@ def camera_loop(server, index, rotate="cw", mirror=False):
 
     import polish
 
-    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    # A file path replays a recorded clip through the same pipeline (landmarks, classifier, speech), no camera needed.
+    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW) if isinstance(index, int) else cv2.VideoCapture(index)
     if not cap.isOpened():
         print(f"camera {index} not found")
         return
@@ -161,6 +162,9 @@ def camera_loop(server, index, rotate="cw", mirror=False):
     while True:
         ok, bgr = cap.read()
         if not ok:
+            if not isinstance(index, int):
+                print("clip finished")
+                break
             time.sleep(0.1)
             continue
         # Match the training clips' geometry (camera clamped on its side on the chest, frames turned to
@@ -349,7 +353,8 @@ if __name__ == "__main__":
             os.makedirs(server.session_dir)
             print(f"Saving clean frames with hands to {server.session_dir}")
         if "--camera" in sys.argv:
-            index = int(sys.argv[sys.argv.index("--camera") + 1])
+            arg = sys.argv[sys.argv.index("--camera") + 1]
+            index = int(arg) if arg.isdigit() else arg  # a camera index, or a clip path to replay
             rotate = sys.argv[sys.argv.index("--rotate") + 1] if "--rotate" in sys.argv else "cw"
             if rotate not in ROTATE_CODES:
                 sys.exit(f"--rotate must be one of {', '.join(ROTATE_CODES)}")
