@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b19-photo-hands';
+const BUILD = 'b20-no-preview';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -197,6 +197,8 @@ export default {
     this.quickIndex = -1;
     this.glossStream = new GlossStream();
     this.pendingSentence = null;
+    // The glasses camera stays off until swipe down or "Jarvis": a chest camera on the laptop (hands_server --camera) tracks hands at 30 fps.
+    this.handsOff = true;
     this.scene = '';
     this.sceneAt = 0;
     // Head gestures are optional signals; the tap path below stays usable without them.
@@ -758,7 +760,7 @@ export default {
       let frames = 0;
       while (active()) {
         const shotAt = Date.now();
-        const photo = await camera.takePhoto({ quality: 'low' });
+        const photo = await camera.takePhoto({ quality: 'low', enableSystemPreview: false });
         if (!active()) break;
         if (!photo || !photo.data) throw new Error('Camera returned no image');
         // 503 = the server has no hand model yet; keep streaming so the dashboard still mirrors the camera.
