@@ -634,7 +634,7 @@ def selftest():
     voiced = speech_gate()
     tone = lambda db: np.sin(np.arange(WINDOW) * 2 * np.pi * 440 / RATE).astype(np.float32) * (10 ** (db / 20) * 2 ** 0.5)
     assert not any(voiced(tone(-55)) for _ in range(5))  # room hiss settles the floor
-    assert voiced(tone(-45)) and round(voiced.floor) == -55 and round(voiced.trigger) == -49, (voiced.floor, voiced.trigger)
+    assert voiced(tone(-45)) and round(voiced.floor) == -55 and round(voiced.trigger) == round(-55 + SPEECH_MARGIN_DB), (voiced.floor, voiced.trigger)
     assert not voiced(tone(-55))
     assert not voiced(tone(-70)) and not voiced(tone(-62))  # a near-silent room still needs SPEECH_MIN_DB
     assert voiced(tone(-58))
