@@ -199,6 +199,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         """Landmarks, classifier, gloss commit and the spoken sentence for one frame."""
         jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
         hands, sign = process_frame(server, bgr, jpeg)
+        state["hands"] = hands
         now = time.time()
         label = sign["label"] if sign else None
         if label:
@@ -241,6 +242,8 @@ def camera_loop(server, index, rotate="cw", mirror=False):
     if live:
         threading.Thread(target=detector, daemon=True).start()
     window = "ASL Captions - sign to speech"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)  # resizable, kept smaller than a 1080p laptop screen
+    cv2.resizeWindow(window, 405, 720)
     shown_n, shown_t = 0, time.time()
     while True:
         read_at = time.time()
@@ -280,9 +283,15 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         if server.last is not None:
             draw_hands(shown, server.last[1])
         bottom = shown.shape[0]
-        for i, line in enumerate((state["sign"], state["said"], f"{state.get('fps', 0):.0f} fps  {state['det_fps']:.1f} detections/s")):
+        hands = state.get("hands") or []
+        lines = [f"1 camera  {state.get('fps', 0):.0f} fps",
+                 f"2 hands   {len(hands)} " + " ".join(h["handedness"][0] for h in hands) + f"  {state['det_fps']:.0f}/s",
+                 "3 model   " + ("  ".join(f"{l[:10]} {p:.0%}" for l, p in signs.latest["top"][:2]) or "-"),
+                 "4 sign    " + (state["sign"] or "-"),
+                 "5 said    " + (state["said"] or "-")]
+        for i, line in enumerate(lines):
             if line:
-                origin = (8, bottom - 12 - 20 * (2 - i))
+                origin = (8, 22 + 20 * i)  # top-left: the bottom of a portrait frame falls off a laptop screen
                 cv2.putText(shown, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
                 cv2.putText(shown, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (94, 255, 64), 1, cv2.LINE_AA)
         try:

@@ -15,10 +15,13 @@ import sys
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import numpy as np
+
 import signs
 from import_cindy import TRACKS, read_track, track_path
 
 MAX_PER_CLIP = 150  # frames kept per clip, spread evenly: the 30 s take must not outweigh the 3 s ones
+PER_LABEL = 240  # frames per label after balancing (WHICH GATE THIS had 4 clips, ME LOST 2)
 REST = 0.12  # the first and last 12% of a take is the hands rising and dropping: the NOTHING class
 CLIPS = {  # camera clip -> gloss key in phrases.PHRASES (sheet column); 015 has no track yet
     "VID_20261010_175752_003": "THIS GATE C4", "VID_20261010_183847_015": "THIS GATE C4",
@@ -50,16 +53,23 @@ def load(tracks=TRACKS, clips=CLIPS):
     return out
 
 
+def balanced(data, per_label=PER_LABEL):
+    """Same frame count for every label: fewer frames from labels with many clips, repeats for labels with few."""
+    by_label = {}
+    for label, frames in data.values():
+        by_label.setdefault(label, []).extend(frames)
+    return {label: [frames[int(i)] for i in np.linspace(0, len(frames) - 1, per_label)]
+            for label, frames in by_label.items() if frames}
+
+
 def run(tracks=TRACKS, out=signs.SAMPLES, dry_run=False, clips=CLIPS):
     signs.SAMPLES, signs.DIR = out, os.path.dirname(os.path.abspath(out))
-    data = load(tracks, clips)
     per_label = Counter()
-    for clip, (label, frames) in data.items():
+    for label, frames in balanced(load(tracks, clips)).items():
         for hands in frames:
             if not dry_run:
                 signs.add_sample(label, hands)
             per_label[label] += 1
-        print(f"  {clip}  {label:<20} {len(frames)} frames")
     print(f"{'DRY RUN: would add' if dry_run else 'added'} {sum(per_label.values())} samples -> {out}")
     for label, n in sorted(per_label.items()):
         print(f"  {label:<20} {n}")
@@ -75,8 +85,9 @@ def evaluate(tracks=TRACKS, clips=CLIPS):
     for held, (label, frames) in data.items():
         if label == "NOTHING":
             continue
-        X = [signs.features(h) for c, (_, fs) in data.items() if c != held for h in fs]
-        y = [l for c, (l, fs) in data.items() if c != held for _ in fs]
+        train = balanced({c: v for c, v in data.items() if c != held})
+        X = [signs.features(h) for fs in train.values() for h in fs]
+        y = [l for l, fs in train.items() for _ in fs]
         m = MLPClassifier(hidden_layer_sizes=(64,), max_iter=2000, random_state=0).fit(np.array(X), y)
         votes = Counter(m.predict(np.array([signs.features(h) for h in frames])))
         votes.pop("NOTHING", None)  # predict() never votes NOTHING
@@ -97,7 +108,7 @@ def selftest():
         for i in range(400):
             f.write(json.dumps({"t": i * 0.1, "hands": [{"label": "Right", "inferred": "observed", "image_points": pts}]}) + "\n")
     got = run(d, os.path.join(d, "signs", "samples.jsonl"), clips={"clipA": "ME LOST", "clipB": "ME DEAF"})
-    assert got == {"ME LOST": MAX_PER_CLIP, "NOTHING": 48}, got  # 400 frames: 48+48 rest, 304 capped; clipB has no track
+    assert got == {"ME LOST": PER_LABEL, "NOTHING": PER_LABEL}, got  # balanced; clipB has no track
     print("selftest ok")
 
 

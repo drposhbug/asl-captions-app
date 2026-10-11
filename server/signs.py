@@ -21,6 +21,7 @@ MODEL = os.path.join(DIR, "model.pkl")
 WINDOW, MIN_CONFIDENCE = 5, 0.6
 
 window = deque(maxlen=WINDOW)  # last frames' class probabilities
+latest = {"top": []}  # smoothed [(label, probability)] x3 from the last predict(), for the live readout
 loaded = {"mtime": None, "model": None}
 
 
@@ -126,10 +127,12 @@ def predict(hands):
     """{"label", "confidence"} averaged over the last WINDOW frames, or None (no hands, unsure, NOTHING)."""
     if not hands or not ready():
         window.clear()
+        latest["top"] = []
         return None
     m = model()
     window.append(m.predict_proba([features(hands)])[0])
     mean = np.mean(window, axis=0)
+    latest["top"] = [(str(m.classes_[i]), float(mean[i])) for i in np.argsort(mean)[::-1][:3]]
     best = int(np.argmax(mean))
     label = str(m.classes_[best])
     if mean[best] < MIN_CONFIDENCE or label == "NOTHING":
