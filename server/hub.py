@@ -77,7 +77,8 @@ def echo_of_spoken(text, now=None):
     words = set(re.findall(r"[a-z0-9']+", text.lower()))
     for line, at in spoken:
         theirs = set(re.findall(r"[a-z0-9']+", line.lower()))
-        if words and now - at < 20 and len(words & theirs) / len(words) >= 0.5:
+        shared = len(words & theirs)
+        if words and now - at < 20 and shared >= 3 and shared / len(words) >= 0.6:
             return True
     return False
 
