@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b10-hotspot-ip';
+const BUILD = 'b11-voice-on-connect';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -249,6 +249,11 @@ export default {
     findLaptop().then((found) => {
       this.setData({ laptopStatus: found ? `LAPTOP ${laptop}` : 'LAPTOP NOT FOUND' });
       if (found) postEvent('status', `glasses build ${BUILD}`);
+      // One spoken line on connect: tests the ElevenLabs voice (glasses + laptop) without a tap.
+      if (found && !this.voiceTested) {
+        this.voiceTested = true;
+        this.speakSentence('Jarvis online. ElevenLabs voice test.', 100);
+      }
     });
     // Rough location as caption-cleanup context (an airport, a cafe); denial just means no location.
     if (this.locationWatch == null && typeof navigator !== 'undefined' && navigator.geolocation) {
