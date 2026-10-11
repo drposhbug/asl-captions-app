@@ -10,6 +10,7 @@ Usage: python import_sheet.py [--out PATH] [--eval] [--dry-run] | --selftest
   --eval  leave-one-clip-out: train on the other clips, majority-vote the held-out clip, print right/wrong.
 """
 import argparse
+import json
 import os
 import sys
 from collections import Counter
@@ -22,6 +23,7 @@ from import_cindy import TRACKS, read_track, track_path
 
 MAX_PER_CLIP = 150  # frames kept per clip, spread evenly: the 30 s take must not outweigh the 3 s ones
 PER_LABEL = 240  # frames per label after balancing (WHICH GATE THIS had 4 clips, ME LOST 2)
+OURS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "signs", "tracks")  # track_clips.py output
 REST = 0.12  # the first and last 12% of a take is the hands rising and dropping: the NOTHING class
 CLIPS = {  # camera clip -> gloss key in phrases.PHRASES (sheet column); 015 has no track yet
     "VID_20261010_175752_003": "THIS GATE C4", "VID_20261010_183847_015": "THIS GATE C4",
@@ -36,15 +38,26 @@ CLIPS = {  # camera clip -> gloss key in phrases.PHRASES (sheet column); 015 has
 }
 
 
+def read_ours(path):
+    """[(t, hands)] from a track_clips.py track; already in our sample format."""
+    with open(path, encoding="utf-8") as f:
+        return [(r["t"], r["hands"]) for r in map(json.loads, f)]
+
+
+USE_OURS = "--ours" in sys.argv  # our WiLoR tracks scored 3/16 leave-one-clip-out vs 7/15 for Cindy's, so opt-in only
+
+
 def load(tracks=TRACKS, clips=CLIPS):
-    """{clip: (label, [hands...])} for every clip with a track, at most MAX_PER_CLIP frames each."""
+    """{clip: (label, [hands...])} for every clip with a track (ours with --ours, else Cindy's), at most MAX_PER_CLIP frames each."""
     out = {}
     for clip, label in clips.items():
-        p = track_path(tracks, clip)
+        ours = os.path.join(OURS, clip + ".jsonl")
+        p = ours if USE_OURS and os.path.exists(ours) else track_path(tracks, clip)
         if not p:
             print(f"  NO TRACK  {clip} ({label})")
             continue
-        frames = [h for _, h in read_track(p)]
+        print(f"  {'ours ' if p == ours else 'cindy'} {clip}")
+        frames = [h for _, h in (read_ours if p == ours else read_track)(p)]
         edge = int(len(frames) * REST)
         rest, frames = frames[:edge] + frames[-edge:], frames[edge:len(frames) - edge]
         step = max(1, len(frames) // MAX_PER_CLIP)
@@ -100,7 +113,6 @@ def evaluate(tracks=TRACKS, clips=CLIPS):
 
 
 def selftest():
-    import json
     import tempfile
     d = tempfile.mkdtemp()
     pts = [[0.1 * i, 0.2] for i in range(21)]
@@ -120,6 +132,7 @@ if __name__ == "__main__":
     ap.add_argument("--tracks", default=TRACKS)
     ap.add_argument("--out", default=signs.SAMPLES)
     ap.add_argument("--eval", action="store_true")
+    ap.add_argument("--ours", action="store_true", help="use server/signs/tracks (track_clips.py) instead of Cindy's tracks")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.eval:
