@@ -142,6 +142,7 @@ def process_frame(server, bgr, jpeg):
 # --camera: a camera on the laptop (webcam facing the signer) replaces the glasses' video stream for
 # hand tracking. No Wi-Fi upload, ~30 fps, ~100 ms latency; the glasses keep captions, display and speech.
 COMMIT_FRAMES = 3        # a gloss must hold this many frames (mirrors pages/index/signing.js)
+MAX_EDGE = 1280          # long edge fed to WiLoR in camera mode (see the resize in camera_loop)
 SENTENCE_GAP_S = 1.5     # no gloss for this long ends the sentence
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
 
@@ -173,6 +174,12 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             bgr = cv2.rotate(bgr, ROTATE_CODES[rotate])
         if mirror:
             bgr = cv2.flip(bgr, 1)
+        # WiLoR cost scales with pixels (measured: 3.8 s at 4K, 0.6 s at 1080p, 0.28 s at 720p for two hands on the
+        # RTX 3050), so cap the long edge; a webcam or a 4K clip both land near 3 fps.
+        h, w = bgr.shape[:2]
+        if max(h, w) > MAX_EDGE:
+            scale = MAX_EDGE / max(h, w)
+            bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
         jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
         hands, sign = process_frame(server, bgr, jpeg)
         now = time.time()
