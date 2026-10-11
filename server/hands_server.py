@@ -62,9 +62,9 @@ def load_pipeline():
         print(f"WARNING: hand tracking disabled ({WILOR_IMPORT_ERROR}); /clips still works. Install requirements.txt.")
         return None
     if torch.cuda.is_available():
-        return WiLorHandPose3dEstimationPipeline(device=torch.device("cuda"), dtype=torch.float16)
+        return WiLorHandPose3dEstimationPipeline(device=torch.device("cuda"), dtype=torch.float16, verbose=False)
     print("WARNING: no CUDA GPU found; WiLoR on CPU takes seconds per frame. Install the CUDA build of torch.")
-    return WiLorHandPose3dEstimationPipeline(device=torch.device("cpu"), dtype=torch.float32)
+    return WiLorHandPose3dEstimationPipeline(device=torch.device("cpu"), dtype=torch.float32, verbose=False)
 
 
 def decode(jpeg_bytes):
