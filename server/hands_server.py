@@ -185,6 +185,10 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # compressed USB stream: fewer stalls
         cap.set(cv2.CAP_PROP_FPS, 30)
     server.camera_mode = True  # glasses photos would fight the webcam for the GPU and overwrite the skeleton
+    while live and not cap.isOpened():  # the camera may still be reconnecting after a replug: wait for it
+        print(f"camera {index} not found, retrying in 3 s (replug the camera or check its USB webcam mode)")
+        time.sleep(3)
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
     if not cap.isOpened():
         print(f"camera {index} not found")
         return
