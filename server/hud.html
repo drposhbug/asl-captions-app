@@ -211,6 +211,7 @@ function onEvent(e) {
     $('conf').style.width = pct || '0';
     $('pct').textContent = pct;
     signs = [];
+    speakOnPhone(e.text);
   } else if (e.type === 'sign') {
     signs = signs.concat(e.text).slice(-12);
   } else if (e.type === 'caption') {
@@ -253,6 +254,27 @@ function onAlert(id, label) {
   bannerTimer = setTimeout(dismiss, 8000);
 }
 $('banner').onclick = dismiss;
+
+// The phone speaks each line too: the same ElevenLabs PCM the glasses play, unlocked by the first touch on the page.
+let audioCtx = null;
+let lastSpoken = { text: '', at: 0 };
+document.addEventListener('pointerdown', () => { audioCtx = audioCtx || new AudioContext(); audioCtx.resume(); });
+async function speakOnPhone(text) {
+  // the say alert and the glasses' own sentence event carry the same line: play it once
+  if (!audioCtx || (text === lastSpoken.text && Date.now() - lastSpoken.at < 10000)) return;
+  lastSpoken = { text, at: Date.now() };
+  try {
+    const r = await fetch('/tts?quiet=1&text=' + encodeURIComponent(text));
+    if (!r.ok) return;
+    const pcm = new Int16Array(await r.arrayBuffer());
+    const buf = audioCtx.createBuffer(1, pcm.length, 16000);
+    buf.copyToChannel(Float32Array.from(pcm, s => s / 32768), 0);
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    src.start();
+  } catch (err) { console.warn('phone voice', err); }
+}
 
 async function keepAwake() {
   try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); }

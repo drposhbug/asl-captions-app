@@ -236,7 +236,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(503, {"error": "set ELEVENLABS_API_KEY"})
             try:
                 audio = tts.speak(text)
-                tts.play(audio)  # the laptop speaks too, for people nearby
+                # The laptop speaks too, for people nearby; the phone page fetches with quiet=1 so the laptop is not doubled.
+                if not q.get("quiet"):
+                    tts.play(audio)
                 return self.send(200, audio, "audio/L16; rate=16000")
             except Exception as e:  # any API failure: the glasses fall back to their built-in voice
                 print("tts failed:", e)
