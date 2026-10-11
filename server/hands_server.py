@@ -695,7 +695,7 @@ if __name__ == "__main__":
         server.session_dir = None
         if "--save-frames" in sys.argv:
             server.session_dir = os.path.join(FRAMES_DIR, time.strftime("%Y%m%d-%H%M%S"))
-            os.makedirs(server.session_dir)
+            os.makedirs(server.session_dir, exist_ok=True)
             print(f"Saving clean frames with hands to {server.session_dir}")
         if "--camera" in sys.argv:
             arg = sys.argv[sys.argv.index("--camera") + 1]
