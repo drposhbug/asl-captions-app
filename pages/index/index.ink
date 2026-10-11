@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b22-feed-on';
+const BUILD = 'b23-warm-model';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -237,6 +237,11 @@ export default {
       if (found && !this.voiceTested) {
         this.voiceTested = true;
         this.speakSentence('Jarvis online. ElevenLabs voice test.', 100);
+      }
+      // Open the model sessions now so the first sign sentence and speaker label do not pay the cold start.
+      if (found) {
+        this.getGrammar().catch(() => {});
+        this.labelSpeaker('warm up').catch(() => {});
       }
     });
     // Rough location as caption-cleanup context (an airport, a cafe); denial just means no location.
