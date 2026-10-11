@@ -153,11 +153,8 @@ def draw_hands(frame, hands):
     """The green skeleton over a frame, from normalised points."""
     height, width = frame.shape[:2]
     for hand in hands:
-        points = [(int(x * width), int(y * height)) for x, y in hand["points"]]
-        for a, b in HAND_CONNECTIONS:
-            cv2.line(frame, points[a], points[b], (94, 255, 64), 2)
-        for point in points:
-            cv2.circle(frame, point, 3, (94, 255, 64), -1)
+        points = np.array([(int(x * width), int(y * height)) for x, y in hand["points"]], np.int32)
+        cv2.polylines(frame, [points[[a, b]] for a, b in HAND_CONNECTIONS], False, (94, 255, 64), 2)
 
 
 def camera_loop(server, index, rotate="cw", mirror=False):
@@ -168,8 +165,13 @@ def camera_loop(server, index, rotate="cw", mirror=False):
     import tts
 
     # A file path replays a recorded clip through the same pipeline (landmarks, classifier, speech), no camera needed.
+    sys.setswitchinterval(0.001)
     live = isinstance(index, int)
     cap = cv2.VideoCapture(index, cv2.CAP_DSHOW) if live else cv2.VideoCapture(index)
+    if live:
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # compressed USB stream: fewer stalls
+        cap.set(cv2.CAP_PROP_FPS, 30)
+    server.camera_mode = True  # glasses photos would fight the webcam for the GPU and overwrite the skeleton
     if not cap.isOpened():
         print(f"camera {index} not found")
         return
@@ -241,7 +243,10 @@ def camera_loop(server, index, rotate="cw", mirror=False):
     window = "ASL Captions - sign to speech"
     shown_n, shown_t = 0, time.time()
     while True:
+        read_at = time.time()
         ok, bgr = cap.read()
+        if live and time.time() - read_at > 0.2:
+            print(f"camera stalled {time.time() - read_at:.2f} s (ok={ok}): USB stream paused, not the model")
         shown_n += 1
         if time.time() - shown_t >= 5:  # display rate, for lag debugging
             state["fps"] = shown_n / (time.time() - shown_t)
@@ -317,6 +322,8 @@ class Handler(BaseHTTPRequestHandler):
         # Some clients (the glasses) send an absolute URL as the request path; compare the path part only.
         if url.path != "/hands":
             return self.reply(404, {"error": "not found"})
+        if getattr(self.server, "camera_mode", False):
+            return self.reply(409, {"error": "hand server is tracking the laptop camera"})
         length = int(self.headers.get("Content-Length") or 0)
         if not 0 < length <= MAX_BODY:
             return self.reply(400, {"error": "send a JPEG body up to 15 MB"})
