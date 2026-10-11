@@ -165,6 +165,7 @@ COMMIT_FRAMES = 3        # a gloss must hold this many frames (mirrors pages/ind
 MAX_EDGE = 1280          # long edge fed to WiLoR in camera mode (see the resize in camera_loop)
 SENTENCE_GAP_S = 2.0     # hands gone or still for this long ends the sentence (a mid-phrase unsure classifier does not)
 STILL_EPS = 0.015        # wrist movement per processed frame below this counts as still
+HOLD_S = 0.4             # a phrase ends with the final handshape held still in view this long; swinging arms never do
 MIN_PHRASE_S = 1.5       # first to last confident frame: a single hand movement is shorter, every sheet phrase is longer
 # Every sheet phrase moves a wrist at least 0.16 of the frame (measured on the clips); a hand holding a phone
 # or resting jitters ~0.02-0.05. Below this the "sentence" is a still hand and nothing is spoken.
@@ -195,6 +196,20 @@ def recency_votes(frames, k=RECENCY_FRAMES):
     for i, (label, confidence) in enumerate(reversed(frames)):
         votes[label] += confidence * np.exp(-i / k)
     return votes
+
+
+def longest_hold(frames, since):
+    """Longest stretch (s) of hands in view and still, over (t, present, moving) records after `since`."""
+    best, run_start = 0.0, None
+    for t, present, moving in frames:
+        if t < since:
+            continue
+        if present and not moving:
+            run_start = t if run_start is None else run_start
+            best = max(best, t - run_start)
+        else:
+            run_start = None
+    return best
 
 
 def draw_hands(frame, hands):
@@ -258,7 +273,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             return []
         return [c["text"] for c in items if c["at"] > (time.time() - seconds) * 1000][-lines:]
 
-    state = {"glosses": [], "votes": Counter(), "moves": [], "labels": [], "wrists": {}, "said_at": deque(maxlen=8), "candidate": None, "held": 0, "last_activity": 0.0,
+    state = {"glosses": [], "votes": Counter(), "moves": [], "labels": [], "wrists": {}, "frames": deque(maxlen=150), "said_at": deque(maxlen=8), "candidate": None, "held": 0, "last_activity": 0.0,
              "sign": "", "said": "", "det_fps": 0.0}
 
     def step(bgr):
@@ -274,6 +289,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         moving = any(side in state["wrists"] and np.linalg.norm(w - state["wrists"][side]) > STILL_EPS
                      for side, w in wrists.items())
         state["wrists"] = wrists
+        state["frames"].append((now, bool(hands), moving))
         if moving and state["glosses"]:
             state["last_activity"] = now
         if label:
@@ -297,9 +313,10 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             motion = wrist_span(state["moves"])
             state["moves"], state["labels"] = [], []
             length = now - state.get("first_label_at", now)
-            if sum(votes.values()) < MIN_VOTES or motion < MIN_MOTION or length < MIN_PHRASE_S + SENTENCE_GAP_S:
-                print(f"dropped (votes {sum(votes.values()):.1f}, motion {motion:.2f}, {length - SENTENCE_GAP_S:.1f} s): "
-                      "a flick or a still hand, not a phrase", dict(votes))
+            hold = longest_hold(state["frames"], now - SENTENCE_GAP_S - 3.0)
+            if sum(votes.values()) < MIN_VOTES or motion < MIN_MOTION or length < MIN_PHRASE_S + SENTENCE_GAP_S or hold < HOLD_S:
+                print(f"dropped (votes {sum(votes.values()):.1f}, motion {motion:.2f}, {length - SENTENCE_GAP_S:.1f} s, "
+                      f"hold {hold:.1f} s): a flick, a still hand or hands that just passed through, not a phrase", dict(votes))
                 state["glosses"], state["votes"] = [], Counter()
                 return
             # The recency-weighted vote over the sentence wins over the last locked-in sign (sheet phrases are single
@@ -612,6 +629,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def selftest():
+    held = [(t * 0.1, True, False) for t in range(10)]            # 0.9 s still in view
+    swing = [(t * 0.1, True, True) for t in range(10)] + [(1.0 + t * 0.1, False, False) for t in range(5)]
+    assert abs(longest_hold(held, 0) - 0.9) < 1e-6 and longest_hold(swing, 0) == 0.0, (longest_hold(held, 0), longest_hold(swing, 0))
+    assert longest_hold(held, 0.5) < 0.5, "only records after `since` count"
     def hand(side, x, y, scale):
         return {"handedness": side, "points": [[x, y]] + [[x, y + scale]] * 8 + [[x, y + scale]] * 12}
     big_r, big_l = hand("Right", 0.3, 0.5, 0.15), hand("Left", 0.7, 0.5, 0.14)
