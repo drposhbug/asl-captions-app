@@ -382,7 +382,7 @@ export default {
         if (this.captionRestart) clearTimeout(this.captionRestart);
         this.captionRestart = setTimeout(() => {
           if (this.visible && !this.data.error && !this.data.listening && !this.uploading) this.startCaptions();
-        }, 1500);
+        }, 400);
       };
       this.recognition = recognition;
     }
