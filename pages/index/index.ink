@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b8-laptop-captions';
+const BUILD = 'b9-voice-test';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -887,9 +887,13 @@ export default {
       source.buffer = buffer;
       source.connect(this.audioContext.destination);
       source.start();
+      // Which voice played, so a tap test on the glasses shows whether ElevenLabs is working.
+      this.setData({ sentenceStatus: `SPOKEN - ELEVENLABS (${(pcm.length / 16000).toFixed(1)} s)` });
+      postEvent('status', `elevenlabs ok: ${(pcm.length / 16000).toFixed(1)} s`);
     } catch (error) {
       postEvent('status', `elevenlabs: ${(error && error.message) || error}`);
       speechSynthesis.speak(new SpeechSynthesisUtterance(sentence), 'immediate');
+      this.setData({ sentenceStatus: `SPOKEN - BUILT-IN VOICE (${((error && error.message) || error)})`.slice(0, 60) });
     }
   },
 
