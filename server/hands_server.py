@@ -160,6 +160,13 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         return
     print(f"Tracking hands from camera {index} (rotate {rotate}, mirror {'on' if mirror else 'off'}); "
           f"sentences go to the glasses via {HUB_URL}/say")
+    def post(path, payload):
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                HUB_URL + path, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}), timeout=5)
+        except Exception as error:
+            print("hub unreachable:", error)
+
     glosses, candidate, held, last_activity = [], None, 0, 0.0
     votes = Counter()  # phrase-level labels (import_sheet.py) flicker frame to frame: the sentence is the vote
     while True:
@@ -194,6 +201,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             if held == COMMIT_FRAMES and (not glosses or glosses[-1] != label):
                 glosses.append(label)
                 print("gloss", label)
+                post("/events", {"type": "sign", "text": label, "confidence": sign["confidence"]})  # dashboard readout
         else:
             candidate, held = None, 0
         if glosses and now - last_activity > SENTENCE_GAP_S:
@@ -201,12 +209,7 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             text = phrases.match(glosses) or phrases.match([votes.most_common(1)[0][0]]) or (
                 polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + ".")
             print("sentence", glosses, dict(votes), "->", text)
-            body = json.dumps({"text": text, "glosses": " ".join(glosses)}).encode()
-            try:
-                urllib.request.urlopen(urllib.request.Request(
-                    HUB_URL + "/say", data=body, headers={"Content-Type": "application/json"}), timeout=5)
-            except Exception as error:
-                print("hub unreachable:", error)
+            post("/say", {"text": text, "glosses": " ".join(glosses)})
             glosses, votes = [], Counter()
 
 
