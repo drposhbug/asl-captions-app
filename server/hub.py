@@ -68,6 +68,20 @@ def push_alert(kind, label, confidence, direction=None, angle=None):
                        "angle": angle})  # degrees, -90 (left) .. 0 (ahead) .. 90 (right); None (mono mic)
 
 
+spoken = deque(maxlen=8)  # (text, time) of lines the hub voiced: the laptop mic hears them and must not caption them
+
+
+def echo_of_spoken(text, now=None):
+    """True when `text` mostly repeats a line voiced in the last 20 s (the glasses or laptop speaker, heard by the mic)."""
+    now = time.time() if now is None else now
+    words = set(re.findall(r"[a-z0-9']+", text.lower()))
+    for line, at in spoken:
+        theirs = set(re.findall(r"[a-z0-9']+", line.lower()))
+        if words and now - at < 20 and len(words & theirs) / len(words) >= 0.5:
+            return True
+    return False
+
+
 def push_caption(text, name=None):
     # caption event and its mirror share one id, like alerts
     with lock:
@@ -88,6 +102,9 @@ def caption_utterance(wave, name):
         return
     except Exception as e:  # laptop captions are a bonus; the glasses' own recognizer keeps going
         print("stt failed:", e)
+        return
+    if text and echo_of_spoken(text):
+        print("caption dropped (our own voice):", text)
         return
     if text:
         push_caption(text, name)
@@ -240,6 +257,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(503, {"error": "set ELEVENLABS_API_KEY"})
             try:
                 audio = tts.speak(text)
+                spoken.append((text, time.time()))
                 # The laptop speaks too, for people nearby; the phone page fetches with quiet=1 so the laptop is not doubled.
                 if SPEAK_LAPTOP and not q.get("quiet"):
                     tts.play(audio)
@@ -638,6 +656,11 @@ def selftest():
     assert not voiced(tone(-55))
     assert not voiced(tone(-70)) and not voiced(tone(-62))  # a near-silent room still needs SPEECH_MIN_DB
     assert voiced(tone(-58))
+    # the mic hears the hub's own voice: a caption that mostly repeats a just-spoken line is dropped
+    spoken.append(("Hello! This is the ElevenLabs voice test.", time.time()))
+    assert echo_of_spoken("hello hello this is the 11 labs voice test") and not echo_of_spoken("which gate is this")
+    assert not echo_of_spoken("hello this is the voice test", now=time.time() + 30)
+    spoken.clear()
     # --mic: stub sounddevice so the check needs no audio hardware
     import types
     sys.modules["sounddevice"] = types.SimpleNamespace(query_devices=lambda: [
