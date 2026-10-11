@@ -14,3 +14,4 @@ server/signs/*
 server/speakers/*
 !server/speakers/.gitkeep
 server/tts/
+server/hands.log
