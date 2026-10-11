@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b18-hands-trace';
+const BUILD = 'b19-fast-poll';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -227,7 +227,7 @@ export default {
   onShow() {
     this.visible = true;
     this.startCaptions();
-    if (!this.alertTimer) this.alertTimer = setInterval(() => this.pollAlerts(), 1000);
+    if (!this.alertTimer) this.alertTimer = setInterval(() => this.pollAlerts(), 500);
     // Who the laptop hears talking (enrolled voices), refreshed every 2 s; unknown voices stay unlabelled.
     if (!this.speakerTimer) {
       this.speakerTimer = setInterval(() => {
@@ -241,7 +241,7 @@ export default {
       }, 2000);
     }
     // Captions from the laptop's mic (hub + ElevenLabs): a second ear for talkers too quiet for the glasses.
-    if (!this.captionTimer) this.captionTimer = setInterval(() => this.pollCaptions(), 1000);
+    if (!this.captionTimer) this.captionTimer = setInterval(() => this.pollCaptions(), 500);
     // onHostFocus does not always fire; keep trying to start the camera until it opens or is switched off.
     if (!this.handsTimer) {
       this.handsTimer = setInterval(() => {
