@@ -35,3 +35,11 @@ Signs come from a local landmark classifier (`server/signs.py`) once `server/sig
 2. Pick a label (first gloss of each line, plus `NOTHING`), hold the sign in view and press RECORD 3s. Repeat for 30-50 reps per sign, varying angle and distance. Record `NOTHING` too: resting hands, scratching, pointing at things.
 3. Press TRAIN (or `python server/signs.py train`). The dashboard shows held-out accuracy per sign and the most confused pairs.
 4. For each confused pair: record more reps of both, or swap one for a more distinct sign in the script above. Retrain; the server picks up the new model on the next frame.
+
+## Network and mic setup (do this before the demo)
+The phone hotspot hands the laptop a new address every session, so the glasses lose the hub. Make the laptop the hotspot instead: it is then always `192.168.137.1`, which the glasses probe first.
+1. Pixel: Settings > Network > Hotspot & tethering > USB tethering ON, with the phone plugged into the laptop. The laptop gets internet through the phone.
+2. Laptop: Settings > Network & internet > Mobile hotspot ON, "Share my internet connection from" = the USB tether (shows as Ethernet). Note the network name and password it shows.
+3. Glasses (Hi Rokid app) and the Pixel's browser: join the laptop's hotspot. The glasses status line should read `LAPTOP 192.168.137.1`.
+4. Ace Pro 2 as the mic and chest camera: USB-C to the laptop, camera in Webcam mode. Start the hub with `--mic ace` (prints the input devices it sees; with `--stereo` the direction arrows need a 2-channel device). Clip the camera to your chest facing the person you talk to.
+5. Phone page: open `http://192.168.137.1:8766` on the Pixel and add it to the home screen. Its panel says the test line, fires a test alarm, starts and stops a clip on the glasses, and shows which build the glasses are running.

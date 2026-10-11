@@ -13,14 +13,14 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b11-voice-on-connect';
+const BUILD = 'b12-tap-phrase';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
 const MAX_LINES = 4;
 // The laptop running server/hands_server.py; the glasses and laptop must share a network.
 // The laptop's address on each Wi-Fi we use (hackathon, Verizon hotspot); the first one whose hub answers wins.
-const LAPTOP_IPS = ['172.16.240.208', '192.168.0.172', '172.16.241.181'];
+const LAPTOP_IPS = ['192.168.137.1', '172.16.240.208', '192.168.0.172', '172.16.241.181'];
 let laptop = LAPTOP_IPS[0];
 const hubUrl = () => `http://${laptop}:8766`;
 const clipUrl = () => `http://${laptop}:8765/clips`;
@@ -515,6 +515,8 @@ export default {
         if (latest) postEvent('status', `alert poll: ${body.alerts.length} new, primed ${primed}, kind ${latest.kind}`);
         // kind "say" is the dashboard's demo fallback: speak the line instead of bannering it
         if (primed && latest && latest.kind === 'say') this.speakSentence(latest.label, 100);
+        // kind "record" comes from the dashboard/phone page posting /record: start or stop a clip
+        else if (primed && latest && latest.kind === 'record') this.toggleRecording();
         else if (primed && latest) {
           const text = ALERT_TEXT[latest.kind] || `! ${String(latest.kind).toUpperCase()}`;
           // A stereo mic on the laptop (or a chest camera) gives the exact angle; older hubs only the side.
@@ -593,8 +595,8 @@ export default {
     this.quickTimer = setTimeout(() => this.setData({ quickPhrase: '' }), QUICK_PHRASE_MS);
   },
 
-  // Glasses have no touchscreen: temple tap (Enter) speaks the shown quick phrase or pending sentence, else
-  // starts/stops a clip; ArrowUp cycles quick phrases (or retries captions while an error is shown); ArrowDown toggles hands.
+  // Glasses have no touchscreen: temple tap (Enter) speaks the shown quick phrase or pending sentence, else stops a
+  // remotely started clip, else speaks the first quick phrase; ArrowUp cycles quick phrases (or retries captions while an error is shown); ArrowDown toggles hands.
   // ASL yes/no lives in the head: a nod confirms what is on screen (or just says "Yes"), a shake rejects it (or "No").
   onHeadGesture(event) {
     const gesture = event && event.gesture;
@@ -635,7 +637,9 @@ export default {
   onKeyUp(event) {
     if (event.code === 'Enter') {
       event.preventDefault();
-      if (!this.confirmShown()) this.toggleRecording();
+      if (this.confirmShown()) return;
+      if (this.recorder) this.stopRecording();
+      else this.speakSentence(QUICK_PHRASES[0], 100);
     } else if (event.code === 'ArrowUp') {
       event.preventDefault();
       if (this.data.error) this.retryCaptions();
@@ -948,7 +952,7 @@ export default {
       <view class="actions">
         <button class="action" bindtap="nextQuickPhrase">{{ 'UP: PHRASE' }}</button>
         <button class="action" bindtap="toggleHands">{{ 'DOWN: HANDS' }}</button>
-        <button class="action" bindtap="toggleRecording">{{ 'TAP - RECORD' }}</button>
+        <button class="action" bindtap="toggleRecording">{{ 'TAP - SPEAK' }}</button>
       </view>
     </view>
 
