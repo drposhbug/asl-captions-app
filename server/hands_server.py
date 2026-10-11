@@ -193,6 +193,8 @@ def camera_loop(server, index, rotate="cw", mirror=False):
     if not cap.isOpened():
         print(f"camera {index} not found")
         return
+    if not live:
+        print(f"clip orientation tag {cap.get(cv2.CAP_PROP_ORIENTATION_META):.0f} deg (applied by OpenCV before --rotate {rotate})")
     print(f"Tracking hands from camera {index} (rotate {rotate}, mirror {'on' if mirror else 'off'}); "
           f"sentences go to the glasses via {HUB_URL}/say and this laptop's speaker. q in the window quits it.")
 
@@ -531,7 +533,9 @@ if __name__ == "__main__":
         if "--camera" in sys.argv:
             arg = sys.argv[sys.argv.index("--camera") + 1]
             index = int(arg) if arg.isdigit() else arg  # a camera index, or a clip path to replay
-            rotate = sys.argv[sys.argv.index("--rotate") + 1] if "--rotate" in sys.argv else "cw"
+            # A webcam frame is landscape and needs turning; a recorded clip carries its own 90-degree orientation tag,
+            # which OpenCV applies on read, so a replay defaults to no extra rotation.
+            rotate = sys.argv[sys.argv.index("--rotate") + 1] if "--rotate" in sys.argv else ("cw" if arg.isdigit() else "none")
             if rotate not in ROTATE_CODES:
                 sys.exit(f"--rotate must be one of {', '.join(ROTATE_CODES)}")
             threading.Thread(target=camera_loop, args=(server, index, rotate, "--mirror" in sys.argv), daemon=True).start()
