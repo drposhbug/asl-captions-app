@@ -149,6 +149,8 @@ SENTENCE_GAP_S = 1.5     # no gloss for this long ends the sentence
 # or resting jitters ~0.02-0.05. Below this the "sentence" is a still hand and nothing is spoken.
 MIN_MOTION = 0.10
 SURE_SHARE = 0.6         # vote share above which the classifier is trusted as is; below it Claude re-ranks with context
+# Keys 1-7 in the live window, in the phrase sheet's column order (how Ethan records them).
+KEY_PHRASES = ["THIS GATE C4", "WHICH GATE THIS", "ME DEAF", "WHERE GATE C4", "THIS FLIGHT DELAYED", "WHEN FOOD ARRIVE", "ME LOST"]
 TAKE_S = 30              # safety cap on one training take; the same key pressed again stops it sooner
 MIN_VOTES = 6            # summed confidence (about 1.5 s of confident frames) before a sentence is spoken; a hand at rest never reaches it
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
@@ -392,10 +394,12 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
-            # Record training takes on this very camera: 1-7 = the sheet phrases (in phrases.PHRASES order), 0 = NOTHING
+            # Record training takes on this very camera: 1-7 = the sheet phrases (sheet column order), 0 = NOTHING
             # (hands at rest / holding a phone), the same key again stops the take, u = undo the last take, t = retrain.
+            # Order is the sheet's columns: 1 Is this gate C4, 2 Which gate did they say, 3 I'm deaf, 4 Where is gate C4,
+            # 5 Is this flight delayed, 6 When does the food arrive, 7 I'm lost.
             if key in range(ord("0"), ord("8")):
-                label = "NOTHING" if key == ord("0") else phrases.PHRASES[key - ord("1")][0]
+                label = "NOTHING" if key == ord("0") else KEY_PHRASES[key - ord("1")]
                 rec_label, rec_until = server.recording
                 if rec_label == label and time.time() < rec_until:
                     server.recording = (None, 0)
