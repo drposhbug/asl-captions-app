@@ -165,7 +165,7 @@ COMMIT_FRAMES = 3        # a gloss must hold this many frames (mirrors pages/ind
 MAX_EDGE = 1280          # long edge fed to WiLoR in camera mode (see the resize in camera_loop)
 SENTENCE_GAP_S = 2.0     # hands gone or still for this long ends the sentence (a mid-phrase unsure classifier does not)
 STILL_EPS = 0.015        # wrist movement per processed frame below this counts as still
-MIN_PHRASE_S = 0.8       # first to last confident frame: an accidental flick is shorter, every sheet phrase is longer
+MIN_PHRASE_S = 1.5       # first to last confident frame: a single hand movement is shorter, every sheet phrase is longer
 # Every sheet phrase moves a wrist at least 0.16 of the frame (measured on the clips); a hand holding a phone
 # or resting jitters ~0.02-0.05. Below this the "sentence" is a still hand and nothing is spoken.
 MIN_MOTION = 0.10
@@ -174,7 +174,7 @@ SURE_SHARE = 0.6         # vote share above which the classifier is trusted as i
 # Key 1 is retired with "Is this gate C4" (too close to "Where is gate C4").
 KEY_PHRASES = [None, "WHICH GATE THIS", "ME DEAF", "WHERE GATE C4", "THIS FLIGHT DELAYED", "WHEN FOOD ARRIVE", "ME LOST"]
 TAKE_S = 30              # safety cap on one training take; the same key pressed again stops it sooner
-MIN_VOTES = 6            # summed confidence (about 1.5 s of confident frames) before a sentence is spoken; a hand at rest never reaches it
+MIN_VOTES = 10           # summed confidence (about 1.5 s of confident frames) before a sentence is spoken; one flick never reaches it
 RECENCY_FRAMES = 10      # e-folding length of the sentence vote: the end of a sign (C4) decides, not the GATE it shares with WHICH GATE THIS
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
 
