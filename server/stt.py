@@ -1,7 +1,9 @@
 """Captions from the laptop/chest mic with ElevenLabs speech-to-text (Scribe), for talkers the glasses' mic misses.
 
 Each utterance is peak-normalised before upload, so a soft voice across a counter still transcribes.
-Needs ELEVENLABS_API_KEY. Self-check (no API call): python stt.py --selftest
+Needs ELEVENLABS_API_KEY; without it, or with STT_BACKEND=local, or once ElevenLabs refuses the key (401/403),
+utterances go to the offline faster-whisper model in stt_local.py instead.
+Self-check (no API call, no model download): python stt.py --selftest
 """
 import io
 import json
@@ -9,16 +11,20 @@ import os
 import sys
 import uuid
 import wave as wavfile
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+import stt_local
 
 RATE = 16000
 MAX_GAIN = 30.0  # ~30 dB: lifts a whisper to full scale without turning silence into noise
 MODEL = os.environ.get("ELEVENLABS_STT_MODEL", "scribe_v1")
 DISABLED = False  # set by the hub after a 401 (key without the speech_to_text permission)
+LOCAL = os.environ.get("STT_BACKEND") == "local"  # also set for the rest of the process once ElevenLabs refuses
 
 
 def available():
-    return bool(os.environ.get("ELEVENLABS_API_KEY"))
+    return bool(os.environ.get("ELEVENLABS_API_KEY")) or stt_local.available()
 
 
 def to_wav(wave):
@@ -39,6 +45,20 @@ def to_wav(wave):
 
 def transcribe(wave):
     """English text of the utterance, '' when nothing was said."""
+    global LOCAL
+    if LOCAL or not os.environ.get("ELEVENLABS_API_KEY"):
+        return stt_local.transcribe(wave)
+    try:
+        return _elevenlabs(wave)
+    except HTTPError as e:
+        if e.code not in (401, 403) or not stt_local.available():
+            raise
+        LOCAL = True
+        print("laptop captions: ElevenLabs refused, using local whisper")
+        return stt_local.transcribe(wave)
+
+
+def _elevenlabs(wave):
     boundary = uuid.uuid4().hex
 
     def part(name, value, filename=None, ctype=None):
@@ -69,6 +89,32 @@ def selftest():
         peak = np.abs(np.frombuffer(w.readframes(RATE), "<i2")).max() / 32767
     assert 0.88 < peak < 0.92, peak  # a loud signal is held just under full scale
     assert len(to_wav(np.zeros(100))) == 44 + 200  # silence stays silence
+
+    # dispatch, without the network or the whisper model
+    global LOCAL, _elevenlabs
+    calls = []
+    stt_local.transcribe = lambda w: calls.append("local") or "local text"
+    stt_local.available = lambda: True
+    _elevenlabs = lambda w: calls.append("cloud") or "cloud text"
+    os.environ.pop("ELEVENLABS_API_KEY", None)
+    LOCAL = False
+    assert available() and transcribe(quiet) == "local text" and calls == ["local"]  # no key -> local
+    os.environ["ELEVENLABS_API_KEY"] = "k"
+    assert transcribe(quiet) == "cloud text" and calls[-1] == "cloud"  # key -> cloud
+
+    def refuse(w):
+        raise HTTPError("u", 401, "Unauthorized", {}, io.BytesIO(b""))
+    _elevenlabs = refuse
+    assert transcribe(quiet) == "local text" and LOCAL  # refused -> local, and stays local
+    _elevenlabs = lambda w: "cloud text"
+    assert transcribe(quiet) == "local text"
+    LOCAL = False
+    _elevenlabs = lambda w: (_ for _ in ()).throw(HTTPError("u", 500, "boom", {}, io.BytesIO(b"")))
+    try:
+        transcribe(quiet)
+        assert False, "a 500 must still reach the hub"
+    except HTTPError as e:
+        assert e.code == 500 and not LOCAL
     print("selftest ok")
 
 
