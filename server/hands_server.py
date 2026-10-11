@@ -102,6 +102,25 @@ def segment_frames(data, extension):
     return [cv2.rotate(f, SEGMENT_ROTATE) if SEGMENT_ROTATE is not None else f for f in frames]
 
 
+def signer_hands(hands):
+    """Lock on to the wearer: the chest camera sees their hands largest and nearest, so keep the biggest hand per side,
+    drop a second detection of the same hand (wrist within 0.05 of a kept one) and any hand under 40% of the largest
+    (someone else's, further away). At most two hands."""
+    def size(h):
+        p = np.asarray(h["points"]); return float(np.linalg.norm(p[9] - p[0]))
+    kept = []
+    for h in sorted(hands, key=size, reverse=True):
+        wrist = np.asarray(h["points"][0])
+        if kept and (size(h) < 0.4 * size(kept[0]) or any(np.linalg.norm(wrist - np.asarray(k["points"][0])) < 0.05 for k in kept)):
+            continue
+        if any(k["handedness"] == h["handedness"] for k in kept) and len({k["handedness"] for k in kept}) == 2:
+            continue
+        kept.append(h)
+        if len(kept) == 2:
+            break
+    return kept
+
+
 def detect(pipeline, bgr):
     height, width = bgr.shape[:2]
     hands = []
@@ -112,7 +131,7 @@ def detect(pipeline, bgr):
             "handedness": "Right" if out["is_right"] else "Left",
             "points": [[round(float(x) / width, 4), round(float(y) / height, 4)] for x, y in keypoints],
         })
-    return hands
+    return signer_hands(hands)
 
 
 MODEL_LOCK = threading.Lock()  # the GPU pipeline serves HTTP requests and the webcam thread; one at a time
@@ -549,6 +568,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def selftest():
+    def hand(side, x, y, scale):
+        return {"handedness": side, "points": [[x, y]] + [[x, y + scale]] * 8 + [[x, y + scale]] * 12}
+    big_r, big_l = hand("Right", 0.3, 0.5, 0.15), hand("Left", 0.7, 0.5, 0.14)
+    dup = hand("Right", 0.31, 0.51, 0.13)          # same hand detected twice
+    far = hand("Left", 0.5, 0.2, 0.04)              # someone else's hand, further away
+    got = signer_hands([far, dup, big_l, big_r])
+    assert got == [big_r, big_l], got
+    assert signer_hands([far]) == [far], "alone, a small hand is still the signer's"
     still = [[{"handedness": "Right", "points": [[0.5 + 0.01 * (i % 2), 0.5]] * 21}] for i in range(10)]
     moving = [[{"handedness": "Right", "points": [[0.2 + 0.05 * i, 0.5]] * 21}] for i in range(10)]
     assert wrist_span(still) < MIN_MOTION < wrist_span(moving), (wrist_span(still), wrist_span(moving))
