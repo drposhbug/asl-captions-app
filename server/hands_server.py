@@ -12,7 +12,9 @@ Signs: a local landmark classifier (signs.py) once signs/model.pkl exists, else 
 POST /record?label=HELLO&seconds=3 saves the next 3 s of hands as samples, GET /record shows counts,
 POST /train retrains signs/model.pkl.
 
-Run:       python hands_server.py [--save-frames]
+Run:       python hands_server.py [--save-frames] [--camera N [--rotate cw|ccw|none] [--mirror]]
+           (--camera: a laptop camera replaces the glasses' video; --rotate turns each frame into portrait
+           like the chest-clamped Insta360 rig the sign model is trained on, default cw; --mirror flips it)
 Self-check: python hands_server.py --selftest
 """
 import json
@@ -29,6 +31,7 @@ import cv2
 import numpy as np
 
 import gloss
+import phrases
 import signs
 
 # torch + WiLoR are a multi-GB install; without them the server still takes clip uploads.
@@ -71,9 +74,9 @@ def decode(jpeg_bytes):
 
 
 SEGMENT_SAMPLES = 6  # frames tracked per video segment, evenly spaced
+ROTATE_CODES = {"ccw": cv2.ROTATE_90_COUNTERCLOCKWISE, "cw": cv2.ROTATE_90_CLOCKWISE, "none": None}
 # The glasses camera records sideways (verified on real clips); rotate pieces upright before tracking.
-SEGMENT_ROTATE = {"ccw": cv2.ROTATE_90_COUNTERCLOCKWISE, "cw": cv2.ROTATE_90_CLOCKWISE, "none": None}[
-    os.environ.get("SEGMENT_ROTATE", "ccw")]
+SEGMENT_ROTATE = ROTATE_CODES[os.environ.get("SEGMENT_ROTATE", "ccw")]
 
 
 def segment_frames(data, extension):
@@ -143,7 +146,7 @@ SENTENCE_GAP_S = 1.5     # no gloss for this long ends the sentence
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
 
 
-def camera_loop(server, index):
+def camera_loop(server, index, rotate="cw", mirror=False):
     import urllib.request
 
     import polish
@@ -152,13 +155,20 @@ def camera_loop(server, index):
     if not cap.isOpened():
         print(f"camera {index} not found")
         return
-    print(f"Tracking hands from camera {index}; sentences go to the glasses via {HUB_URL}/say")
+    print(f"Tracking hands from camera {index} (rotate {rotate}, mirror {'on' if mirror else 'off'}); "
+          f"sentences go to the glasses via {HUB_URL}/say")
     glosses, candidate, held, last_activity = [], None, 0, 0.0
     while True:
         ok, bgr = cap.read()
         if not ok:
             time.sleep(0.1)
             continue
+        # Match the training clips' geometry (camera clamped on its side on the chest, frames turned to
+        # portrait): the landmark classifier is not rotation invariant.
+        if ROTATE_CODES[rotate] is not None:
+            bgr = cv2.rotate(bgr, ROTATE_CODES[rotate])
+        if mirror:
+            bgr = cv2.flip(bgr, 1)
         jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
         hands, sign = process_frame(server, bgr, jpeg)
         now = time.time()
@@ -173,7 +183,9 @@ def camera_loop(server, index):
         else:
             candidate, held = None, 0
         if glosses and now - last_activity > SENTENCE_GAP_S:
-            text = polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + "."
+            # The signer's own phrases skip the model, as fillSentence does on the glasses.
+            text = phrases.match(glosses) or (
+                polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + ".")
             print("sentence", glosses, "->", text)
             body = json.dumps({"text": text, "glosses": " ".join(glosses)}).encode()
             try:
@@ -338,6 +350,9 @@ if __name__ == "__main__":
             print(f"Saving clean frames with hands to {server.session_dir}")
         if "--camera" in sys.argv:
             index = int(sys.argv[sys.argv.index("--camera") + 1])
-            threading.Thread(target=camera_loop, args=(server, index), daemon=True).start()
+            rotate = sys.argv[sys.argv.index("--rotate") + 1] if "--rotate" in sys.argv else "cw"
+            if rotate not in ROTATE_CODES:
+                sys.exit(f"--rotate must be one of {', '.join(ROTATE_CODES)}")
+            threading.Thread(target=camera_loop, args=(server, index, rotate, "--mirror" in sys.argv), daemon=True).start()
         print(f"Hand server on port {PORT}. Set HAND_SERVER_URL in pages/index/index.ink to http://<this computer's LAN IP>:{PORT}/hands")
         server.serve_forever()

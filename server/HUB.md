@@ -11,6 +11,7 @@ Run: `python hub.py [--sounds] [--yamnet]` (Python313: `C:\Users\thorn\AppData\L
 Firewall (admin PowerShell, once): `netsh advfirewall firewall add rule name="ASL hub" dir=in action=allow protocol=TCP localport=8766`.
 `POST /test-alert` (no body) -> pushes alert kind `fire_alarm`, label `FIRE ALARM (TEST)`, confidence 1.0 (demo / phone-buzz check): `curl -X POST http://127.0.0.1:8766/test-alert`.
 `POST /say` `{"text":str,"glosses":str}` -> adds a `sign` event (glosses) and pushes alert kind `say` (label = text, confidence 1.0); the glasses speak it, the HUD shows it as the sentence (no flash).
+Hand server laptop-camera mode posts to `/say` too: `python hands_server.py --camera N [--rotate cw|ccw|none] [--mirror]` (wilor env). `--rotate` turns each webcam frame to portrait before tracking (default `cw`, the chest-clamped Insta360 rig the sign model is trained on; `none` for an upright webcam); `--mirror` flips it horizontally (default off). Phrases from `PHRASES` in signing.js (`server/phrases.py`, `python phrases.py --selftest`) are spoken word for word; anything else goes through `polish.py`.
 Dashboard keys `1`-`9`, `0`, `-`, `=` post the 12 lines of `DEMO_SCRIPT.md` to `/say`; `?` shows the key hint.
 This is the demo fallback: if sign recognition fails on stage, press the line's key.
 `GET /manifest.json`, `/sw.js`, `/icon-192.png`, `/icon-512.png` -> PWA bits so Chrome offers install ("ASL Alerts").
