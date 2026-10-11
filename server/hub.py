@@ -700,7 +700,7 @@ if __name__ == "__main__":
     if tts.available():  # pre-fetch the fixed lines so their first /tts plays from disk
         with open(HUD, encoding="utf-8") as f:  # the DEMO sentences in hud.html: ['key', 'GLOSSES', 'sentence']
             demo = [a or b for a, b in re.findall(r"^\s*\['.', '[^']*', (?:'([^']*)'|\"([^\"]*)\")\],", f.read(), re.M)]
-        tts.warm(["Which gate did they say?", "I'm deaf.", "Is this gate C4?", "Where is gate C4?", "Is this flight delayed?", "When does the food arrive?", "I'm lost.",  # PHRASES in signing.js
+        tts.warm(["Which gate did they say?", "I'm deaf.", "Where is gate C4?", "Is this flight delayed?", "When does the food arrive?", "I'm lost.",  # PHRASES in signing.js
                   "I'm deaf, please face me so I can read you.", "Please write it down or type it on your phone.",
                   "I use sign language. Please speak slowly and clearly.", "Can you point me to the gate?",
                   "I need help, please call someone who can sign.",  # QUICK_PHRASES in pages/index/index.ink

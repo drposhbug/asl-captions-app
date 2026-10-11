@@ -26,8 +26,6 @@ PER_LABEL = 240  # frames per label after balancing (WHICH GATE THIS had 4 clips
 OURS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "signs", "tracks")  # track_clips.py output
 REST = 0.12  # the first and last 12% of a take is the hands rising and dropping: the NOTHING class
 CLIPS = {  # camera clip -> gloss key in phrases.PHRASES (sheet column); 015 has no track yet
-    "VID_20261010_175752_003": "THIS GATE C4", "VID_20261010_183847_015": "THIS GATE C4",
-    "VID_20261010_184035_016": "THIS GATE C4",
     "VID_20261010_175600_001": "WHICH GATE THIS", "VID_20261010_183301_010": "WHICH GATE THIS",
     "VID_20261010_183518_012": "WHICH GATE THIS", "VID_20261010_183354_011": "WHICH GATE THIS",
     "VID_20261010_181016_005": "ME DEAF", "VID_20261010_184209_017": "ME DEAF",

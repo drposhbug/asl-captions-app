@@ -59,7 +59,6 @@ export class GlossStream {
 const PHRASES = [
   ['WHICH GATE THIS', 'Which gate did they say?'],
   ['ME DEAF', "I'm deaf."],
-  ['THIS GATE C4', 'Is this gate C4?'],
   ['WHERE GATE C4', 'Where is gate C4?'],
   ['THIS FLIGHT DELAYED', 'Is this flight delayed?'],
   ['WHEN FOOD ARRIVE', 'When does the food arrive?'],
