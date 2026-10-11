@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b14-no-overlap';
+const BUILD = 'b15-alarm-steady';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -52,7 +52,9 @@ const USER_NAME = 'Oscar';
 const NAME_PATTERN = new RegExp(`\\b${USER_NAME}\\b`, 'i');
 // Saying "Jarvis" wakes the app like "Hi Rokid" (that system wake word can't be renamed); ASR often hears "Jervis".
 const WAKE_PATTERN = /\bj[ae]rvis\b/i;
-const BANNER_MS = 6000;
+// An alert flashes for FLASH_MS to grab attention, then holds steady so it can be read, until BANNER_MS.
+const FLASH_MS = 3000;
+const BANNER_MS = 8000;
 // A quick phrase stays armed for the next tap this long after the last swipe.
 const QUICK_PHRASE_MS = 8000;
 // A nod or shake is only an answer if someone asked something this recently (or a sentence is waiting on screen).
@@ -335,6 +337,7 @@ export default {
     if (this.locationWatch != null) navigator.geolocation.clearWatch(this.locationWatch);
     this.locationWatch = null;
     if (this.bannerTimer) clearTimeout(this.bannerTimer);
+    if (this.steadyTimer) clearTimeout(this.steadyTimer);
     if (this.quickTimer) clearTimeout(this.quickTimer);
     if (this.grammar) this.grammar.destroy();
     this.grammar = null;
@@ -580,11 +583,19 @@ export default {
   // An alarm takes over the whole display and flashes; a Deaf wearer must not be able to miss it.
   showBanner(banner, angle = null) {
     if (this.bannerTimer) clearTimeout(this.bannerTimer);
+    if (this.steadyTimer) clearTimeout(this.steadyTimer);
     if (this.flashTimer) clearInterval(this.flashTimer);
     const degrees = angle === null ? 0 : Math.round(Math.abs(angle));
     const bannerWhere = angle === null ? '' : degrees <= 10 ? 'AHEAD' : `${degrees}\u00B0 ${angle < 0 ? 'LEFT' : 'RIGHT'}`;
-    this.setData({ banner, bannerAngle: angle === null ? null : Math.round(angle), bannerWhere, flash: true });
+    // The banner is the only thing on screen: drop the sentence box and quick phrase under it.
+    this.pendingSentence = null;
+    this.setData({ banner, bannerAngle: angle === null ? null : Math.round(angle), bannerWhere, flash: true, sentence: '', glossText: '', sentenceStatus: '', quickPhrase: '' });
     this.flashTimer = setInterval(() => this.setData({ flash: !this.data.flash }), 250);
+    this.steadyTimer = setTimeout(() => {
+      if (this.flashTimer) clearInterval(this.flashTimer);
+      this.flashTimer = null;
+      this.setData({ flash: false });
+    }, FLASH_MS);
     this.bannerTimer = setTimeout(() => {
       if (this.flashTimer) clearInterval(this.flashTimer);
       this.setData({ banner: '', bannerAngle: null, bannerWhere: '', flash: false });
@@ -751,8 +762,10 @@ export default {
     this.handsWanted = false;
     const active = () => this.handRun === run;
     this.setData({ handStatus: 'HANDS - STARTING CAMERA...' });
-    const ctx = wx.createCanvasContext('hands');
+    let ctx = null;
     try {
+      postEvent('status', 'hands: starting camera');
+      ctx = wx.createCanvasContext('hands');
       if (!ctx) throw new Error('Hand overlay canvas is missing');
       // The same recorder that makes clips (proven on these glasses), at low resolution and bitrate.
       run.stream = await openCamera(480, 360);
@@ -945,15 +958,6 @@ export default {
 <page>
   <view class="page">
     <canvas id="hands" class="hands" width="{{canvasWidth}}" height="{{canvasHeight}}"></canvas>
-    <view class="{{ flash ? 'banner banner-flash' : 'banner' }}" ink:if="{{banner}}">
-      <view class="arrow" ink:if="{{bannerWhere}}" style="transform: rotate({{bannerAngle}}deg)">
-        <view class="{{ flash ? 'arrow-head arrow-head-left arrow-flash' : 'arrow-head arrow-head-left' }}"></view>
-        <view class="{{ flash ? 'arrow-head arrow-head-right arrow-flash' : 'arrow-head arrow-head-right' }}"></view>
-        <view class="{{ flash ? 'arrow-shaft arrow-flash' : 'arrow-shaft' }}"></view>
-      </view>
-      <text class="{{ flash ? 'banner-text banner-text-flash' : 'banner-text' }}">{{banner}}</text>
-      <text class="{{ flash ? 'banner-text banner-text-flash' : 'banner-text' }}" ink:if="{{bannerWhere}}">{{bannerWhere}}</text>
-    </view>
     <view class="status-row">
       <text class="status">{{ (listening ? 'LISTENING' : 'MIC OFF') + (laptopStatus ? ' - ' + laptopStatus : '') }}</text>
       <view class="actions">
@@ -987,6 +991,16 @@ export default {
 
     <text class="photo-status" ink:if="{{clipStatus}}">{{clipStatus}}</text>
     <text class="photo-status" ink:if="{{handStatus}}">{{handStatus}}</text>
+    <!-- Last child so the alert paints above everything else. -->
+    <view class="{{ flash ? 'banner banner-flash' : 'banner' }}" ink:if="{{banner}}">
+      <view class="arrow" ink:if="{{bannerWhere}}" style="transform: rotate({{bannerAngle}}deg)">
+        <view class="{{ flash ? 'arrow-head arrow-head-left arrow-flash' : 'arrow-head arrow-head-left' }}"></view>
+        <view class="{{ flash ? 'arrow-head arrow-head-right arrow-flash' : 'arrow-head arrow-head-right' }}"></view>
+        <view class="{{ flash ? 'arrow-shaft arrow-flash' : 'arrow-shaft' }}"></view>
+      </view>
+      <text class="{{ flash ? 'banner-text banner-text-flash' : 'banner-text' }}">{{banner}}</text>
+      <text class="{{ flash ? 'banner-text banner-text-flash' : 'banner-text' }}" ink:if="{{bannerWhere}}">{{bannerWhere}}</text>
+    </view>
   </view>
 </page>
 
