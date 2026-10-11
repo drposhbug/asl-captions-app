@@ -52,6 +52,18 @@ def add_sample(label, hands):
         f.write(json.dumps({"label": label, "hands": hands, "at": int(time.time() * 1000)}) + "\n")
 
 
+def drop_since(at_ms):
+    """Remove samples recorded at or after `at_ms` (undo a bad take); returns how many went."""
+    kept = [s for s in load_samples() if s["at"] < at_ms]
+    gone = len(load_samples()) - len(kept)
+    if gone:
+        with open(SAMPLES + ".tmp", "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(s) + "
+" for s in kept)
+        os.replace(SAMPLES + ".tmp", SAMPLES)
+    return gone
+
+
 def load_samples():
     if not os.path.exists(SAMPLES):
         return []
@@ -176,6 +188,9 @@ def selftest():
         got = predict(fake("NOTHING", shift=0.3))
     assert got is None, got
     assert predict([]) is None
+    before = len(load_samples())
+    add_sample("UNDO", [{"handedness": "Right", "points": [[0.5, 0.5]] * 21}])
+    assert drop_since(load_samples()[-1]["at"]) == 1 and len(load_samples()) == before, "drop_since removes the last take"
     print("\nselftest ok")
 
 
