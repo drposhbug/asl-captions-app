@@ -431,8 +431,8 @@ def loudness_classifier():
     return classify
 
 
-SPEECH_MARGIN_DB = 6.0  # a window counts as speech this far above the room's noise floor...
-SPEECH_MIN_DB = -60.0  # ...and above this absolute level, so hiss in a silent room never triggers
+SPEECH_MARGIN_DB = 10.0  # a window counts as speech this far above the room's noise floor...
+SPEECH_MIN_DB = -50.0  # ...and above this absolute level, so hiss in a silent room never triggers
 FLOOR_WINDOWS = 30  # noise floor = quietest window of the last ~30 s
 
 

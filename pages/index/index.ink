@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b19-fast-poll';
+const BUILD = 'b19-photo-hands';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -24,10 +24,9 @@ const LAPTOP_IPS = ['192.168.137.1', '172.16.240.208', '192.168.0.172', '172.16.
 let laptop = LAPTOP_IPS[0];
 const hubUrl = () => `http://${laptop}:8766`;
 const clipUrl = () => `http://${laptop}:8765/clips`;
-const segmentUrl = () => `http://${laptop}:8765/segment`;
-// Hand tracking streams short low-bitrate video pieces: ~50x smaller than photos, so captions keep running.
-const SEGMENT_MS = 1500;
-const SEGMENT_BITRATE = 500000;
+const handUrl = () => `http://${laptop}:8765/hands`;
+// One low-quality photo per PHOTO_MS goes to the hand server; slower than video but the only capture that works here.
+const PHOTO_MS = 700;
 
 // Probes every candidate hub in parallel; resolves true when one answers so the page can start posting.
 function findLaptop() {
@@ -106,25 +105,6 @@ async function openCamera(width, height) {
     timedOut = true;
     throw error;
   }
-}
-
-// Records one self-contained video piece (its own file header) so the laptop can decode it alone.
-// Resolves with the piece, or null when the camera stopped before any data arrived.
-function recordPiece(stream, mimeType, ms) {
-  return new Promise((resolve, reject) => {
-    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: SEGMENT_BITRATE });
-    const chunks = [];
-    recorder.ondataavailable = (event) => { if (event.data && event.data.size) chunks.push(event.data); };
-    recorder.onerror = (event) => reject(new Error((event && event.error && event.error.message) || 'Recorder error'));
-    recorder.onstop = () => {
-      if (!chunks.length) return resolve(null);
-      resolve(chunks.length === 1 || typeof Blob !== 'function' ? chunks[0] : new Blob(chunks, { type: mimeType.split(';')[0] }));
-    };
-    recorder.start();
-    setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, ms);
-    // Some firmware never fires onstop: give up on the piece instead of hanging the loop forever.
-    setTimeout(() => resolve(null), ms + 4000);
-  });
 }
 
 function releaseCamera(run) {
@@ -555,8 +535,9 @@ export default {
         if (!primed) return;
         for (const caption of body.captions || []) {
           if (!caption.text || !caption.text.trim()) continue;
-          // The laptop's transcript (ElevenLabs Scribe) is cleaner than the glasses' own: it replaces the matching line.
-          const key = this.sameLine(caption.text) || `laptop:${caption.id}`;
+          // The glasses usually hear it themselves; the laptop only fills in lines they missed.
+          if (this.sameLine(caption.text)) continue;
+          const key = `laptop:${caption.id}`;
           this.segments.set(key, caption.text);
           const mark = this.marks.get(key) || { confidence: null };
           mark.label = caption.label || mark.label || '';
@@ -755,8 +736,9 @@ export default {
     }
   },
 
-  // Streams camera frames to the WiLoR hand server and draws the returned hand skeletons.
-  // One frame in flight at a time, so the frame rate follows the network and server speed.
+
+  // Streams camera photos to the WiLoR hand server and draws the returned hand skeletons.
+  // One photo in flight at a time; small low-quality photos leave the mic's audio upload room, so captions keep running.
   async startHands() {
     if (this.handRun) return;
     // A token per run: a stopped loop still awaiting a frame must not touch a newer run.
@@ -769,35 +751,27 @@ export default {
       postEvent('status', 'hands: starting camera');
       ctx = wx.createCanvasContext('hands');
       if (!ctx) throw new Error('Hand overlay canvas is missing');
-      // The same recorder that makes clips (proven on these glasses), at low resolution and bitrate.
-      run.stream = await openCamera(480, 360);
-      if (!active()) return;
-      postEvent('status', 'hands: camera open');
-      this.setData({ handStatus: 'HANDS - CAMERA OPEN, RECORDING...' });
-      const canCheck = typeof MediaRecorder.isTypeSupported === 'function';
-      const mimeType = ['video/mp4', 'video/webm;codecs=vp8,opus'].find((type) => !canCheck || MediaRecorder.isTypeSupported(type));
-      const type = mimeType.split(';')[0];
-      let uploading = null;
-      let pieces = 0;
+      // The wx photo camera is the one capture path proven on these glasses: MediaRecorder returns empty pieces.
+      const camera = wx.media && wx.media.createCameraContext();
+      if (!camera) throw new Error('Camera is unavailable');
+      const started = Date.now();
+      let frames = 0;
       while (active()) {
-        const piece = await recordPiece(run.stream, mimeType, SEGMENT_MS);
+        const shotAt = Date.now();
+        const photo = await camera.takePhoto({ quality: 'low' });
         if (!active()) break;
-        if (!pieces && !uploading) postEvent('status', `hands: piece recorded ${piece ? Math.round((piece.size || 0) / 1024) : 0} KB`);
-        // One upload in flight: if the last piece is still going up, drop this one rather than queue behind it.
-        if (uploading || !piece) continue;
-        const sentAt = Date.now();
-        uploading = postBinary(segmentUrl(), piece, type, 30000, [503])
-          .then(({ hands = [], gloss = null, glosses = [] }) => {
-            if (!active()) return;
-            this.drawHands(ctx, hands);
-            (glosses.length ? glosses : [gloss]).forEach((g) => this.onGlossFrame(g, null));
-            pieces += 1;
-            if (pieces === 1) postEvent('status', `hands: first video piece ${Math.round((piece.size || 0) / 1024)} KB, round trip ${Date.now() - sentAt} ms`);
-            const seen = gloss ? `${gloss.label} ${Math.round(gloss.confidence * 100)}%` : `${hands.length} SEEN`;
-            this.setData({ handStatus: `HANDS - ${seen} - ${((Date.now() - sentAt) / 1000).toFixed(1)}s BEHIND` });
-          })
-          .catch((error) => postEvent('status', `hands piece failed: ${(error && error.message) || error}`))
-          .then(() => { uploading = null; });
+        if (!photo || !photo.data) throw new Error('Camera returned no image');
+        // 503 = the server has no hand model yet; keep streaming so the dashboard still mirrors the camera.
+        const { hands = [], gloss = null } = await postBinary(handUrl(), photo.data, 'image/jpeg', 30000, [503]);
+        if (!active()) break;
+        this.drawHands(ctx, hands);
+        this.onGlossFrame(gloss, photo.data);
+        frames += 1;
+        if (frames === 1) postEvent('status', `hands: first photo ${Math.round((photo.data.byteLength || 0) / 1024)} KB, round trip ${Date.now() - shotAt} ms`);
+        const seen = gloss ? `${gloss.label} ${Math.round(gloss.confidence * 100)}%` : `${hands.length} SEEN`;
+        this.setData({ handStatus: `HANDS - ${seen} - ${((frames * 1000) / (Date.now() - started)).toFixed(1)} FPS` });
+        const wait = PHOTO_MS - (Date.now() - shotAt);
+        if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
       }
     } catch (error) {
       // Stopping releases the camera mid-frame; that failure is expected, not worth showing.
