@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -164,8 +165,8 @@ def process_frame(server, bgr, jpeg):
 COMMIT_FRAMES = 3        # a gloss must hold this many frames (mirrors pages/index/signing.js)
 MAX_EDGE = 1280          # long edge fed to WiLoR in camera mode (see the resize in camera_loop)
 SENTENCE_GAP_S = 2.0     # hands gone or still for this long ends the sentence (a mid-phrase unsure classifier does not)
-STILL_SPEED = 0.12       # wrist speed (frame widths per second) below which a hand counts as still; landmark jitter is ~0.05/s
-HOLD_S = 0.4             # a phrase ends with the final handshape held still in view this long; swinging arms never do
+STILL_SPEED = 0.6        # wrist speed (frame widths per second) below which a hand counts as still: 97% of real takes hold under it, a hand crossing the frame never does
+HOLD_S = 0.3             # a phrase ends with the final handshape held still in view this long; swinging arms never do
 MIN_PHRASE_S = 1.5       # first to last confident frame: a single hand movement is shorter, every sheet phrase is longer
 # Every sheet phrase moves a wrist at least 0.16 of the frame (measured on the clips); a hand holding a phone
 # or resting jitters ~0.02-0.05. Below this the "sentence" is a still hand and nothing is spoken.
@@ -359,7 +360,11 @@ def camera_loop(server, index, rotate="cw", mirror=False):
                 time.sleep(0.005)
                 continue
             t0 = time.time()
-            step(pending.pop())
+            try:
+                step(pending.pop())
+            except Exception:  # one bad frame or a failed Claude call must not kill the only detector thread
+                traceback.print_exc()
+                state["glosses"], state["votes"], state["moves"], state["labels"] = [], Counter(), [], []
             state["det_fps"] = 1 / max(time.time() - t0, 1e-3)
 
     if live:
