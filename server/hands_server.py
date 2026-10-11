@@ -149,7 +149,7 @@ SENTENCE_GAP_S = 1.5     # no gloss for this long ends the sentence
 # or resting jitters ~0.02-0.05. Below this the "sentence" is a still hand and nothing is spoken.
 MIN_MOTION = 0.10
 SURE_SHARE = 0.6         # vote share above which the classifier is trusted as is; below it Claude re-ranks with context
-TAKE_S = 5               # seconds one training take records (keys 1-7, 0 in the live window)
+TAKE_S = 30              # safety cap on one training take; the same key pressed again stops it sooner
 MIN_VOTES = 6            # summed confidence (about 1.5 s of confident frames) before a sentence is spoken; a hand at rest never reaches it
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
 
@@ -358,11 +358,11 @@ def camera_loop(server, index, rotate="cw", mirror=False):
                  "4 sign    " + (state["sign"] or "-"),
                  "5 said    " + (state["said"] or "-")]
         if time.time() < rec_until:
-            lines.append(f"REC {rec_label}  {rec_until - time.time():.1f} s  ({signs.counts().get(rec_label, 0)} samples)")
+            lines.append(f"REC {rec_label}  {time.time() - state['take_at'] / 1000:.0f} s  press the key again to stop")
         elif state.get("trained"):
             lines.append(state["trained"])
         else:
-            lines.append("keys: 1-7 record phrase, 0 record nothing, u undo take, t train, q quit")
+            lines.append("keys: 1-7 start/stop a phrase take, 0 nothing, u undo take, t train, q quit")
         for i, line in enumerate(lines):
             if line:
                 origin = (8, 22 + 20 * i)  # top-left: the bottom of a portrait frame falls off a laptop screen
@@ -374,12 +374,17 @@ def camera_loop(server, index, rotate="cw", mirror=False):
             if key == ord("q"):
                 break
             # Record training takes on this very camera: 1-7 = the sheet phrases (in phrases.PHRASES order), 0 = NOTHING
-            # (hands at rest / holding a phone), u = undo the last take, t = retrain. A take records TAKE_S of frames with hands.
+            # (hands at rest / holding a phone), the same key again stops the take, u = undo the last take, t = retrain.
             if key in range(ord("0"), ord("8")):
                 label = "NOTHING" if key == ord("0") else phrases.PHRASES[key - ord("1")][0]
-                state["take_at"], state["take_label"] = int(time.time() * 1000), label
-                server.recording = (label, time.time() + TAKE_S)
-                print("recording", label)
+                rec_label, rec_until = server.recording
+                if rec_label == label and time.time() < rec_until:
+                    server.recording = (None, 0)
+                    print("stopped", label)
+                else:
+                    state["take_at"], state["take_label"] = int(time.time() * 1000), label
+                    server.recording = (label, time.time() + TAKE_S)
+                    print("recording", label)
             elif key == ord("u") and state.get("take_at"):
                 gone = signs.drop_since(state["take_at"])
                 server.recording = (None, 0)
