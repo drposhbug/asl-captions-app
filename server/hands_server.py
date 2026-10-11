@@ -18,7 +18,7 @@ Run:       python hands_server.py [--save-frames] [--camera N|clip.mp4 [--rotate
 Self-check: python hands_server.py --selftest
 """
 import json
-from collections import Counter
+from collections import Counter, deque
 import os
 import re
 import sys
@@ -145,21 +145,37 @@ def process_frame(server, bgr, jpeg):
 COMMIT_FRAMES = 3        # a gloss must hold this many frames (mirrors pages/index/signing.js)
 MAX_EDGE = 1280          # long edge fed to WiLoR in camera mode (see the resize in camera_loop)
 SENTENCE_GAP_S = 1.5     # no gloss for this long ends the sentence
+MIN_VOTES = 6            # summed confidence (about 1.5 s of confident frames) before a sentence is spoken; a hand at rest never reaches it
 HUB_URL = os.environ.get("HUB_URL", "http://127.0.0.1:8766")
+
+
+def draw_hands(frame, hands):
+    """The green skeleton over a frame, from normalised points."""
+    height, width = frame.shape[:2]
+    for hand in hands:
+        points = [(int(x * width), int(y * height)) for x, y in hand["points"]]
+        for a, b in HAND_CONNECTIONS:
+            cv2.line(frame, points[a], points[b], (94, 255, 64), 2)
+        for point in points:
+            cv2.circle(frame, point, 3, (94, 255, 64), -1)
 
 
 def camera_loop(server, index, rotate="cw", mirror=False):
     import urllib.request
+    from urllib.parse import quote
 
     import polish
+    import tts
 
     # A file path replays a recorded clip through the same pipeline (landmarks, classifier, speech), no camera needed.
-    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW) if isinstance(index, int) else cv2.VideoCapture(index)
+    live = isinstance(index, int)
+    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW) if live else cv2.VideoCapture(index)
     if not cap.isOpened():
         print(f"camera {index} not found")
         return
     print(f"Tracking hands from camera {index} (rotate {rotate}, mirror {'on' if mirror else 'off'}); "
-          f"sentences go to the glasses via {HUB_URL}/say")
+          f"sentences go to the glasses via {HUB_URL}/say and this laptop's speaker. q in the window quits it.")
+
     def post(path, payload):
         try:
             urllib.request.urlopen(urllib.request.Request(
@@ -167,12 +183,72 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         except Exception as error:
             print("hub unreachable:", error)
 
-    glosses, candidate, held, last_activity = [], None, 0, 0.0
-    votes = Counter()  # phrase-level labels (import_sheet.py) flicker frame to frame: the sentence is the vote
+    def say(text, glosses):
+        post("/say", {"text": text, "glosses": " ".join(glosses)})
+        try:  # Tyler's ElevenLabs voice from the hub's cache, played here so no browser page is needed
+            tts.play(urllib.request.urlopen(HUB_URL + "/tts?quiet=1&text=" + quote(text), timeout=20).read())
+        except Exception as error:
+            print("tts failed:", error)
+
+    state = {"glosses": [], "votes": Counter(), "candidate": None, "held": 0, "last_activity": 0.0,
+             "sign": "", "said": "", "det_fps": 0.0}
+
+    def step(bgr):
+        """Landmarks, classifier, gloss commit and the spoken sentence for one frame."""
+        jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+        hands, sign = process_frame(server, bgr, jpeg)
+        now = time.time()
+        label = sign["label"] if sign else None
+        if label:
+            state["last_activity"] = now
+            state["votes"][label] += sign["confidence"]  # phrase labels flicker frame to frame: the sentence is the vote
+            state["held"] = state["held"] + 1 if label == state["candidate"] else 1
+            state["candidate"] = label
+            if state["held"] == COMMIT_FRAMES and (not state["glosses"] or state["glosses"][-1] != label):
+                state["glosses"].append(label)
+                state["sign"] = f"{label}  {sign['confidence']:.2f}"
+                print("gloss", label)
+                post("/events", {"type": "sign", "text": label, "confidence": sign["confidence"]})  # dashboard readout
+        else:
+            state["candidate"], state["held"] = None, 0
+        if state["glosses"] and now - state["last_activity"] > SENTENCE_GAP_S:
+            glosses, votes = state["glosses"], state["votes"]
+            if sum(votes.values()) < MIN_VOTES:
+                print("too short, dropped", glosses, dict(votes))
+                state["glosses"], state["votes"] = [], Counter()
+                return
+            # The signer's own phrases skip the model, as fillSentence does on the glasses.
+            text = phrases.match(glosses) or phrases.match([votes.most_common(1)[0][0]]) or (
+                polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + ".")
+            print("sentence", glosses, dict(votes), "->", text)
+            state["said"] = text
+            say(text, glosses)
+            state["glosses"], state["votes"] = [], Counter()
+
+    pending = deque(maxlen=1)  # the newest camera frame: WiLoR (~0.2 s) takes whichever is current, the display never waits
+
+    def detector():
+        while True:
+            if not pending:
+                time.sleep(0.005)
+                continue
+            t0 = time.time()
+            step(pending.pop())
+            state["det_fps"] = 1 / max(time.time() - t0, 1e-3)
+
+    if live:
+        threading.Thread(target=detector, daemon=True).start()
+    window = "ASL Captions - sign to speech"
+    shown_n, shown_t = 0, time.time()
     while True:
         ok, bgr = cap.read()
+        shown_n += 1
+        if time.time() - shown_t >= 5:  # display rate, for lag debugging
+            state["fps"] = shown_n / (time.time() - shown_t)
+            print(f"display {state['fps']:.1f} fps, {state['det_fps']:.1f} detections/s")
+            shown_n, shown_t = 0, time.time()
         if not ok:
-            if not isinstance(index, int):
+            if not live:
                 print("clip finished")
                 break
             time.sleep(0.1)
@@ -184,33 +260,35 @@ def camera_loop(server, index, rotate="cw", mirror=False):
         if mirror:
             bgr = cv2.flip(bgr, 1)
         # WiLoR cost scales with pixels (measured: 3.8 s at 4K, 0.6 s at 1080p, 0.28 s at 720p for two hands on the
-        # RTX 3050), so cap the long edge; a webcam or a 4K clip both land near 3 fps.
+        # RTX 3050), so cap the long edge.
         h, w = bgr.shape[:2]
         if max(h, w) > MAX_EDGE:
             scale = MAX_EDGE / max(h, w)
             bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-        jpeg = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
-        hands, sign = process_frame(server, bgr, jpeg)
-        now = time.time()
-        label = sign["label"] if sign else None
-        if label:
-            last_activity = now
-            votes[label] += sign["confidence"]
-            held = held + 1 if label == candidate else 1
-            candidate = label
-            if held == COMMIT_FRAMES and (not glosses or glosses[-1] != label):
-                glosses.append(label)
-                print("gloss", label)
-                post("/events", {"type": "sign", "text": label, "confidence": sign["confidence"]})  # dashboard readout
+        if live:
+            pending.append(bgr)
         else:
-            candidate, held = None, 0
-        if glosses and now - last_activity > SENTENCE_GAP_S:
-            # The signer's own phrases skip the model, as fillSentence does on the glasses.
-            text = phrases.match(glosses) or phrases.match([votes.most_common(1)[0][0]]) or (
-                polish.sentence_from_glosses(glosses, []) if polish.available() else " ".join(glosses).capitalize() + ".")
-            print("sentence", glosses, dict(votes), "->", text)
-            post("/say", {"text": text, "glosses": " ".join(glosses)})
-            glosses, votes = [], Counter()
+            step(bgr)  # a replay processes every frame
+        if window is None:
+            continue
+        shown = bgr.copy()
+        if server.last is not None:
+            draw_hands(shown, server.last[1])
+        bottom = shown.shape[0]
+        for i, line in enumerate((state["sign"], state["said"], f"{state.get('fps', 0):.0f} fps  {state['det_fps']:.1f} detections/s")):
+            if line:
+                origin = (8, bottom - 12 - 20 * (2 - i))
+                cv2.putText(shown, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
+                cv2.putText(shown, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (94, 255, 64), 1, cv2.LINE_AA)
+        try:
+            cv2.imshow(window, shown)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+        except cv2.error as error:  # no display: keep tracking and speaking without the window
+            print("no window:", error)
+            window = None
+    cap.release()
+    cv2.destroyAllWindows()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -309,13 +387,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/frame.jpg":  # the clean frame (no skeleton), for scene context
             hands = []
             frame = cv2.resize(frame, None, fx=0.5, fy=0.5) if max(frame.shape[:2]) > 1000 else frame
-        height, width = frame.shape[:2]
-        for hand in hands:
-            points = [(int(x * width), int(y * height)) for x, y in hand["points"]]
-            for a, b in HAND_CONNECTIONS:
-                cv2.line(frame, points[a], points[b], (94, 255, 64), 2)
-            for point in points:
-                cv2.circle(frame, point, 3, (94, 255, 64), -1)
+        draw_hands(frame, hands)
         _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")

@@ -19,6 +19,7 @@ import signs
 from import_cindy import TRACKS, read_track, track_path
 
 MAX_PER_CLIP = 150  # frames kept per clip, spread evenly: the 30 s take must not outweigh the 3 s ones
+REST = 0.12  # the first and last 12% of a take is the hands rising and dropping: the NOTHING class
 CLIPS = {  # camera clip -> gloss key in phrases.PHRASES (sheet column); 015 has no track yet
     "VID_20261010_175752_003": "THIS GATE C4", "VID_20261010_183847_015": "THIS GATE C4",
     "VID_20261010_184035_016": "THIS GATE C4",
@@ -41,8 +42,11 @@ def load(tracks=TRACKS, clips=CLIPS):
             print(f"  NO TRACK  {clip} ({label})")
             continue
         frames = [h for _, h in read_track(p)]
+        edge = int(len(frames) * REST)
+        rest, frames = frames[:edge] + frames[-edge:], frames[edge:len(frames) - edge]
         step = max(1, len(frames) // MAX_PER_CLIP)
         out[clip] = (label, frames[::step][:MAX_PER_CLIP])
+        out[clip + "/rest"] = ("NOTHING", rest[::step])
     return out
 
 
@@ -69,15 +73,19 @@ def evaluate(tracks=TRACKS, clips=CLIPS):
     data = load(tracks, clips)
     right = 0
     for held, (label, frames) in data.items():
+        if label == "NOTHING":
+            continue
         X = [signs.features(h) for c, (_, fs) in data.items() if c != held for h in fs]
         y = [l for c, (l, fs) in data.items() if c != held for _ in fs]
         m = MLPClassifier(hidden_layer_sizes=(64,), max_iter=2000, random_state=0).fit(np.array(X), y)
         votes = Counter(m.predict(np.array([signs.features(h) for h in frames])))
+        votes.pop("NOTHING", None)  # predict() never votes NOTHING
         guess, n = votes.most_common(1)[0]
         right += guess == label
         print(f"  {'ok  ' if guess == label else 'MISS'} {held}  {label:<20} -> {guess:<20} {n}/{len(frames)} frames")
-    print(f"leave-one-clip-out: {right}/{len(data)} clips voted right")
-    return right, len(data)
+    clips = sum(1 for label, _ in data.values() if label != "NOTHING")
+    print(f"leave-one-clip-out: {right}/{clips} clips voted right")
+    return right, clips
 
 
 def selftest():
@@ -89,7 +97,7 @@ def selftest():
         for i in range(400):
             f.write(json.dumps({"t": i * 0.1, "hands": [{"label": "Right", "inferred": "observed", "image_points": pts}]}) + "\n")
     got = run(d, os.path.join(d, "signs", "samples.jsonl"), clips={"clipA": "ME LOST", "clipB": "ME DEAF"})
-    assert got == {"ME LOST": MAX_PER_CLIP}, got  # 400 frames capped, clipB has no track
+    assert got == {"ME LOST": MAX_PER_CLIP, "NOTHING": 48}, got  # 400 frames: 48+48 rest, 304 capped; clipB has no track
     print("selftest ok")
 
 
