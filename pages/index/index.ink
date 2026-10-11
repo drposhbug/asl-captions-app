@@ -13,7 +13,7 @@ import { fallbackSentence } from './dictionary.js';
 // A fresh look at the scene costs an image prompt, so take one at most this often.
 const SCENE_REFRESH_MS = 15000;
 // Reported to the laptop on start so the build running on the glasses can be confirmed remotely.
-const BUILD = 'b16-quiet-captions';
+const BUILD = 'b17-banner-only';
 
 // shortcut: line width is estimated by character count (about 33 fit at 30px); measure text if captions clip.
 const MAX_CHARS_PER_LINE = 28;
@@ -963,7 +963,7 @@ export default {
 <page>
   <view class="page">
     <canvas id="hands" class="hands" width="{{canvasWidth}}" height="{{canvasHeight}}"></canvas>
-    <view class="status-row">
+    <view class="status-row" ink:if="{{!banner}}">
       <text class="status">{{ (listening ? 'LISTENING' : 'MIC OFF') + (laptopStatus ? ' - ' + laptopStatus : '') }}</text>
       <view class="actions">
         <button class="action" bindtap="nextQuickPhrase">{{ 'UP: PHRASE' }}</button>
@@ -972,30 +972,30 @@ export default {
       </view>
     </view>
 
-    <view class="signing" ink:if="{{glossText || sentence}}">
+    <view class="signing" ink:if="{{!banner && (glossText || sentence)}}">
       <text class="gloss-text" ink:if="{{glossText}}">{{ 'SIGNED - ' + glossText }}</text>
       <text class="sentence-text" ink:if="{{sentence}}">{{sentence}}</text>
       <view class="bar" ink:if="{{sentence && sentencePercent}}"><view class="bar-fill" style="width: {{sentencePercent}}%"></view></view>
       <text class="photo-status" ink:if="{{sentenceStatus}}">{{sentenceStatus}}</text>
     </view>
 
-    <view class="signing" ink:if="{{quickPhrase}}">
+    <view class="signing" ink:if="{{!banner && quickPhrase}}">
       <text class="quick-phrase">{{quickPhrase}}</text>
       <text class="photo-status">{{ 'TAP TO SAY - UP: NEXT' }}</text>
     </view>
 
-    <view class="captions">
+    <view class="captions" ink:if="{{!banner}}">
       <text class="caption-text" ink:for="{{lines}}">{{item}}</text>
       <text class="caption-empty" ink:if="{{!lines.length}}">{{ listening ? 'Waiting for speech...' : 'Wake the glasses to start captions' }}</text>
     </view>
 
-    <view class="error" ink:if="{{error}}">
+    <view class="error" ink:if="{{!banner && error}}">
       <text class="error-text">{{ '! ERROR - ' + error }}</text>
       <button class="action" bindtap="retryCaptions">{{ 'UP: RETRY' }}</button>
     </view>
 
-    <text class="photo-status" ink:if="{{clipStatus}}">{{clipStatus}}</text>
-    <text class="photo-status" ink:if="{{handStatus}}">{{handStatus}}</text>
+    <text class="photo-status" ink:if="{{!banner && clipStatus}}">{{clipStatus}}</text>
+    <text class="photo-status" ink:if="{{!banner && handStatus}}">{{handStatus}}</text>
     <!-- Last child so the alert paints above everything else. -->
     <view class="{{ flash ? 'banner banner-flash' : 'banner' }}" ink:if="{{banner}}">
       <view class="arrow" ink:if="{{bannerWhere}}" style="transform: rotate({{bannerAngle}}deg)">

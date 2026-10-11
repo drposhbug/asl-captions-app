@@ -20,12 +20,12 @@ def available():
 
 def speak(text):
     """Raw 16 kHz mono 16-bit PCM of `text`: the glasses play it without a decoder (MP3 support is undocumented)."""
-    path = os.path.join(CACHE, hashlib.sha1(("%s|%s|%s" % (VOICE, MODEL, text)).encode()).hexdigest() + ".pcm")
+    path = os.path.join(CACHE, hashlib.sha1(("%s|%s|en|%s" % (VOICE, MODEL, text)).encode()).hexdigest() + ".pcm")
     if os.path.exists(path):
         with open(path, "rb") as f:
             return f.read()
     req = Request("https://api.elevenlabs.io/v1/text-to-speech/%s?output_format=pcm_16000" % VOICE,
-                  data=json.dumps({"text": text, "model_id": MODEL}).encode(),
+                  data=json.dumps({"text": text, "model_id": MODEL, "language_code": "en"}).encode(),
                   headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"], "Content-Type": "application/json",
                            "Accept": "audio/pcm"})
     with urlopen(req, timeout=15) as r:
